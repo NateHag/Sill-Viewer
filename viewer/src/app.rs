@@ -619,7 +619,7 @@ fn stream(ctx: &egui::Context, live: &mut Live, target: &Target) -> Option<Strin
         // exactly that size. Otherwise the panel's size in points.
         let (monitor, ppp) = ctx.input(|i| (i.viewport().monitor_size, i.viewport().native_pixels_per_point));
         let pixels = match (live.match_screen, monitor, ppp) {
-            (true, Some(m), Some(p)) => Some(((m.x * p).round() as u32, (m.y * p).round() as u32)),
+            (true, Some(m), Some(p)) => Some(((m.x * p).round() as u32, (m.y * p).round() as u32, p)),
             _ => None,
         };
         let size = if live.match_screen { monitor.unwrap_or(avail.size()) } else { avail.size() };

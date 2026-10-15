@@ -23,6 +23,7 @@ In the stream window
   and "Fit screen" (a virtual screen sized to this window, on hosts that have one).
 - Match this screen: full screen, on a virtual screen with exactly your monitor's resolution, so
   one remote pixel is one pixel on your screen (hosts with virtual screens: sill-linux).
+  The host also uses your screen's scale (a Retina Mac: 200%), so text keeps its normal size.
 - Full screen: click "Full screen". Press Ctrl+Alt+Shift+F to leave it.
 - Mouse, scroll wheel and keyboard go to the computer while the pointer is over the picture.
   Your own cursor shows where clicks land (with sill-linux 7 or later the host leaves its
