@@ -11,7 +11,7 @@ import zlib
 
 from gi.repository import GLib
 
-from . import keymap, mutter, video, wire
+from . import files, keymap, mutter, video, wire
 from .identity import Devices, Identity, config_dir
 from .mdns import Advertiser
 from .net import Door
@@ -241,6 +241,9 @@ class Host:
 
     def session_ended(self, s):
         self._release_input(s)
+        inc = getattr(s, "incoming", None)
+        if inc is not None:
+            inc.close()      # half-received files are deleted
         with self.lock:
             self.sessions.discard(s)
             self.input_state.pop(s, None)
@@ -276,7 +279,38 @@ class Host:
             self.pairing.open_window()
         elif kind == wire.CLIPBOARD:
             self._clipboard_from_device(s, json.loads(payload))
+        elif kind == wire.FILE_DATA:
+            self._incoming(s).data(s, payload)
+        elif kind == wire.FILE_START:
+            self._incoming(s).start(s, json.loads(payload))
+        elif kind == wire.FILE_END:
+            self._incoming(s).end(s, json.loads(payload))
+        elif kind == wire.FILE_CANCEL:
+            self._incoming(s).cancel(json.loads(payload))
+        elif kind == wire.FILE_REQUEST:
+            threading.Thread(target=self._send_copied_files, args=(s,), daemon=True).start()
         # kinds 7, 15, 25, 27, 28 and unknown ones are skipped: no apps, menus or gestures here
+
+    # --- files both ways ------------------------------------------------------------------------
+    def _incoming(self, s):
+        inc = getattr(s, "incoming", None)
+        if inc is None:
+            inc = s.incoming = files.Incoming()
+        return inc
+
+    def _next_file_id(self):
+        with self.lock:
+            self.file_id = getattr(self, "file_id", 0) + 1
+            return self.file_id
+
+    def _send_copied_files(self, s):
+        cap = self.capture
+        paths = cap.copied_paths() if cap is not None else []
+        if not paths:
+            files.status(s, f"No files are copied on {self.name}. Select files in Files, press Ctrl+C, "
+                            "then try again.")
+            return
+        files.send_paths(s, paths, self._next_file_id)
 
     # --- clipboard: text both ways, while a session streams --------------------------------------
     def _clipboard_from_device(self, s, msg):

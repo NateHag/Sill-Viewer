@@ -208,6 +208,8 @@ class Session:
         self.name = door.devices.name(fp) or f"device {short_name(fp)}"
         self.lock = threading.Lock()
         self.out = collections.deque()
+        self.bulk_bytes = 0          # file data queued and not sent yet
+        self.bulk_cond = threading.Condition(self.lock)
         self.pending_frames = 0
         self.waiting_key = True
         self.withheld = 0
@@ -244,6 +246,23 @@ class Session:
             if frame:
                 self.pending_frames += 1
         self._wake()
+
+    def send_bulk(self, data, limit=1 << 20, timeout=60):
+        """File data: waits (on the calling thread) while more than `limit` bytes of it are queued,
+        so a big file never fills memory or crowds out the video. False if the session ended."""
+        deadline = time.monotonic() + timeout
+        with self.lock:
+            while self.alive and self.bulk_bytes > limit:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    return False
+                self.bulk_cond.wait(min(left, 1.0))
+            if not self.alive:
+                return False
+            self.out.append((data, "bulk"))
+            self.bulk_bytes += len(data)
+        self._wake()
+        return True
 
     def offer_au(self, params_msg, frame_msg, key):
         """A video access unit. Withholds deltas when the link is behind, then waits for a keyframe."""
@@ -315,6 +334,8 @@ class Session:
             with self.lock:
                 self.alive = False
                 self.out.clear()
+                self.bulk_bytes = 0
+                self.bulk_cond.notify_all()
             for s in (self.rwake, self.wwake):
                 s.close()
             try:
@@ -385,7 +406,10 @@ class Session:
                 self.chunk = None
                 if off >= len(data):
                     self.cur = None
-                    if is_frame:
+                    if is_frame == "bulk":
+                        self.bulk_bytes -= len(data)
+                        self.bulk_cond.notify_all()
+                    elif is_frame:
                         self.pending_frames -= 1
                 else:
                     self.cur = (data, off, is_frame)

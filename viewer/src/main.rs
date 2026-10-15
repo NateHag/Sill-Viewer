@@ -8,6 +8,7 @@
 mod app;
 mod decode;
 mod discovery;
+mod files;
 mod identity;
 mod input;
 #[cfg(target_os = "macos")]
@@ -125,6 +126,12 @@ fn headless(a: &[String], id: identity::Identity) -> i32 {
         s.send(wire::CHANGE_SETTINGS, &serde_json::json!({"token": 1, "maxFPS": fps}));
     }
     s.viewport(1280.0, 800.0, fps, opt("--pixels").and_then(|p| { let (w, h) = p.split_once('x')?; Some((w.parse().ok()?, h.parse().ok()?, opt("--scale").and_then(|v| v.parse().ok()).unwrap_or(1.0))) }));
+    if let Some(p) = opt("--send") {
+        s.send_files(vec![std::path::PathBuf::from(p)]);
+    }
+    if a.iter().any(|x| x == "--get-files") {
+        s.request_files();
+    }
     let start = Instant::now();
     let mut last = 0u64;
     let mut rtt = 0.0;
@@ -139,6 +146,7 @@ fn headless(a: &[String], id: identity::Identity) -> i32 {
                 }
                 session::Event::HostSettings(v) => println!("  settings: {}", v["settings"]),
                 session::Event::Rtt(ms) => rtt = ms,
+                session::Event::Note(t) => println!("  note: {t}"),
                 session::Event::Goodbye(v) => println!("  goodbye: {v}"),
                 session::Event::Ended(why) => {
                     println!("ENDED: {why}");

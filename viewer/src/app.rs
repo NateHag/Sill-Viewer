@@ -43,6 +43,8 @@ struct Live {
     machines: Vec<(String, String, bool, bool)>,
     /// A tray-style command the switcher asked for ("connect:<id>").
     switch_to: Option<String>,
+    /// The last file transfer note, and when it came.
+    note: Option<(String, Instant)>,
     settings: Option<Value>,
     rtt: f64,
     sent_viewport: (f32, f32, u32, u32, u32),
@@ -247,7 +249,7 @@ impl App {
             let r = Session::start(&t.addr, &id, pin, ev_tx, v_tx, wake.clone()).map(|session| {
                 decode::spawn(v_rx, shared.clone(), wake.clone());
                 Box::new(Live {
-                    session, events: ev_rx, shared, windows: vec![], active: json!({"none": {}}), mac_name: t.name.clone(), machines: vec![], switch_to: None,
+                    session, events: ev_rx, shared, windows: vec![], active: json!({"none": {}}), mac_name: t.name.clone(), machines: vec![], switch_to: None, note: None,
                     settings: None, rtt: 0.0, sent_viewport: (0.0, 0.0, 0, 0, 0), match_screen: false, sent_mods: Modifiers::NONE,
                     buttons_down: vec![], scroll_open: None, last_pos: (0.5, 0.5), token: 0, fps: 60,
                     cursor_in_video: false, fullscreen: false, os_fullscreen: None,
@@ -553,6 +555,7 @@ fn stream(ctx: &egui::Context, live: &mut Live, target: &Target) -> Option<Strin
                 }
             }
             Event::HostSettings(v) => live.settings = Some(v),
+            Event::Note(t) => live.note = Some((t, Instant::now())),
             Event::Rtt(ms) => live.rtt = if live.rtt == 0.0 { ms } else { live.rtt * 0.8 + ms * 0.2 },
             Event::Goodbye(v) => {
                 return Some(v["message"].as_str().map(String::from)
@@ -562,6 +565,24 @@ fn stream(ctx: &egui::Context, live: &mut Live, target: &Target) -> Option<Strin
         }
     }
     let mut leave = None;
+
+    // Files dropped on the window go to the host's Downloads folder.
+    let (dropped, hovering) = ctx.input(|i| (i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect::<Vec<_>>(),
+                                             !i.raw.hovered_files.is_empty()));
+    if !dropped.is_empty() {
+        live.session.send_files(dropped);
+    }
+    let note = if hovering {
+        Some(format!("Drop to send to {}'s Downloads folder", live.mac_name))
+    } else {
+        live.note.as_ref().filter(|(_, at)| at.elapsed() < Duration::from_secs(6)).map(|(t, _)| t.clone())
+    };
+    if let Some(text) = note {
+        egui::Area::new(egui::Id::new("note")).anchor(egui::Align2::CENTER_BOTTOM, [0.0, -24.0]).show(ctx, |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| ui.label(RichText::new(text).strong()));
+        });
+        ctx.request_repaint_after(Duration::from_millis(500));
+    }
 
     live.session.focused.store(ctx.input(|i| i.focused), std::sync::atomic::Ordering::Relaxed);
 
@@ -646,6 +667,13 @@ fn stream(ctx: &egui::Context, live: &mut Live, target: &Target) -> Option<Strin
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("Disconnect").clicked() {
                         leave = Some(String::new());
+                    }
+                    if ui.button("Get copied files")
+                        .on_hover_text(format!("Copy files on {} (Ctrl+C in Files), then click here: they come to your \
+                                                Downloads folder. To send files there, drop them on this window.", live.mac_name))
+                        .clicked() {
+                        live.session.request_files();
+                        live.note = Some(("Asking for the copied files…".into(), Instant::now()));
                     }
                     // A Mac has its own full screen button (the green one), so no second one here.
                     if !cfg!(target_os = "macos") && ui.button("Full screen").on_hover_text("Ctrl+Alt+Shift+F leaves it").clicked() {

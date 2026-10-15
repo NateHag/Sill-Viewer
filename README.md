@@ -15,6 +15,13 @@ This project adds:
 | **Macs** | Only share their screen | **Also show another Mac or Linux screen**, in a window. |
 | **Linux viewer** | Not supported | **Show a Mac or Linux screen on a Linux PC.** |
 
+Between the desktop viewers and a Linux computer, you also get:
+
+- **Copy and paste of text**, both ways.
+- **Files both ways:** drop files on the viewer to send them; click "Get copied files" to fetch what you copied on Linux.
+- **Match this screen:** the Linux desktop takes your screen's exact resolution.
+- **A quick switcher** between your paired computers.
+
 > **Unofficial.** This is an independent companion project. It is not made by, or affiliated with,
 > the Sill team. "Sill" names the app it works with. If the Sill author prefers another name,
 > this project will be renamed.

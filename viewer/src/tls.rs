@@ -121,8 +121,20 @@ pub fn connect(addr: &str, alpn: &[u8], pin: Option<[u8; 32]>, id: &Identity) ->
 impl TlsConn {
     pub fn send(&self, data: &[u8]) -> std::io::Result<()> {
         let mut c = self.conn.lock().unwrap();
-        c.writer().write_all(data)?;
         let mut s = &self.sock;
+        // rustls takes a limited amount of plaintext at a time: write, flush, repeat.
+        let mut rest = data;
+        while !rest.is_empty() {
+            let n = c.writer().write(rest)?;
+            rest = &rest[n..];
+            let flushed = c.wants_write();
+            while c.wants_write() {
+                c.write_tls(&mut s)?;
+            }
+            if n == 0 && !flushed {
+                return Err(std::io::Error::new(std::io::ErrorKind::WriteZero, "TLS would not take the data"));
+            }
+        }
         while c.wants_write() {
             c.write_tls(&mut s)?;
         }

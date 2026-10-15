@@ -27,6 +27,9 @@ In the stream window
   On sill-linux the virtual screen replaces the computer's own monitors while you match: your
   windows and icons move to it, and its monitors go dark until you leave Match or disconnect.
 - Full screen: click "Full screen" (Mac: the green window button). Ctrl+Alt+Shift+F leaves it.
+- Files (sill-linux hosts): drop files or folders on the window to send them to the computer's
+  Downloads folder. To get files from it, copy them there (Ctrl+C in Files), then click
+  "Get copied files": they arrive in this computer's Downloads folder.
 - Copy and paste work both ways (text, with sill-linux hosts). Text you copy on this computer
   goes to the host when you come back to the viewer window.
 - Mouse, scroll wheel and keyboard go to the computer while the pointer is over the picture.

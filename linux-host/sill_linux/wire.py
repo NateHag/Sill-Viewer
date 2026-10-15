@@ -45,6 +45,17 @@ GESTURE = 28
 # changed on this side. Sill's own apps skip kinds they do not know.
 CLIPBOARD = 200
 MAX_CLIPBOARD_TEXT = 900_000
+# Not Sill's either: files both ways. FILE_START JSON {"id", "name" (relative path, "/"), "size"};
+# FILE_DATA: 4-byte big-endian id, then bytes; FILE_END JSON {"id"}; FILE_CANCEL JSON {"id"};
+# FILE_REQUEST (viewer to host) JSON {}: "send me the files copied on your side";
+# FILE_STATUS JSON {"text"}: a short note for the person, such as "Saved 3 files to Downloads".
+FILE_START = 201
+FILE_DATA = 202
+FILE_END = 203
+FILE_REQUEST = 204
+FILE_STATUS = 205
+FILE_CANCEL = 206
+FILE_CHUNK = 128 * 1024
 
 MAX_CLIENT_PAYLOAD = 1 << 20
 MAX_PAIRING_PAYLOAD = 4096

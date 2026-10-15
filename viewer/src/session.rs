@@ -15,6 +15,8 @@ pub enum Event {
     Goodbye(Value),
     Rtt(f64),
     Ended(String),
+    /// A short note for the person (file transfers).
+    Note(String),
 }
 
 /// One access unit for the decoder.
@@ -33,6 +35,10 @@ pub struct Session {
     pub focused: Arc<AtomicBool>,
     /// The clipboard text both sides have, so neither sends it back.
     clip_last: Arc<Mutex<Option<String>>>,
+    events: Sender<Event>,
+    wake: Arc<dyn Fn() + Send + Sync>,
+    file_id: Arc<AtomicU32>,
+    sending: Arc<AtomicBool>,
     pub frames: Arc<AtomicU32>,
     pub host_fp: [u8; 32],
     pub peer_addr: String,
@@ -51,9 +57,11 @@ impl Session {
         let focused = Arc::new(AtomicBool::new(true));
         let clip_last = Arc::new(Mutex::new(None::<String>));
         let (clip_tx, clip_rx) = channel::<String>();
+        let events_out = events.clone();
 
         {
             let (conn, alive, frames, wake) = (conn.clone(), alive.clone(), frames.clone(), wake.clone());
+            let mut incoming = crate::files::Incoming::default();
             std::thread::Builder::new().name("session read".into()).spawn(move || {
                 let mut params: Option<(usize, Vec<Vec<u8>>)> = None;
                 let mut pending_params = false;
@@ -89,6 +97,20 @@ impl Session {
                             if m.payload.len() == 8 {
                                 let sent = f64::from_bits(u64::from_be_bytes(m.payload[..8].try_into().unwrap()));
                                 let _ = events.send(Event::Rtt((start.elapsed().as_secs_f64() - sent) * 1000.0));
+                            }
+                        }
+                        wire::FILE_START | wire::FILE_DATA | wire::FILE_END | wire::FILE_CANCEL => {
+                            if let Some(n) = incoming.on_message(m.kind, &m.payload) {
+                                let _ = events.send(Event::Note(n));
+                                wake();
+                            }
+                        }
+                        wire::FILE_STATUS => {
+                            if let Ok(v) = serde_json::from_slice::<Value>(&m.payload) {
+                                if let Some(t) = v["text"].as_str() {
+                                    let _ = events.send(Event::Note(t.to_string()));
+                                    wake();
+                                }
                             }
                         }
                         wire::CLIPBOARD => {
@@ -152,7 +174,8 @@ impl Session {
         }
         let host_fp = conn.peer_fp;
         let peer_addr = conn.peer_addr.clone();
-        Ok(Session { conn, alive, focused, clip_last, frames, host_fp, peer_addr })
+        Ok(Session { conn, alive, focused, clip_last, events: events_out, wake, file_id: Arc::new(AtomicU32::new(1)),
+                     sending: Arc::new(AtomicBool::new(false)), frames, host_fp, peer_addr })
     }
 
     pub fn send(&self, kind: u8, v: &Value) {
@@ -183,6 +206,29 @@ impl Session {
         if self.alive.load(Ordering::Relaxed) {
             offer(&self.conn, &self.clip_last, text);
         }
+    }
+
+    /// Sends files and folders to the host's Downloads folder, on a worker thread.
+    pub fn send_files(&self, paths: Vec<std::path::PathBuf>) {
+        let note = { let (ev, wake) = (self.events.clone(), self.wake.clone());
+                     move |t: String| { let _ = ev.send(Event::Note(t)); wake(); } };
+        if self.sending.swap(true, Ordering::SeqCst) {
+            note("Still sending the last files; try again when they are done".into());
+            return;
+        }
+        let (conn, sending, ids) = (self.conn.clone(), self.sending.clone(), self.file_id.clone());
+        let first = ids.fetch_add(100_000, Ordering::SeqCst);
+        std::thread::Builder::new().name("send files".into()).spawn(move || {
+            if let Err(e) = crate::files::send(&conn, &paths, first, &note) {
+                note(e);
+            }
+            sending.store(false, Ordering::SeqCst);
+        }).ok();
+    }
+
+    /// Asks the host for the files copied there; they arrive in this computer's Downloads folder.
+    pub fn request_files(&self) {
+        self.send(wire::FILE_REQUEST, &json!({}));
     }
 
     pub fn input(&self, v: Value) {

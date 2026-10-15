@@ -23,6 +23,14 @@ pub const HELLO: u8 = 23;
 /// changed on this side. Sill's own apps skip kinds they do not know.
 pub const CLIPBOARD: u8 = 200;
 pub const MAX_CLIPBOARD_TEXT: usize = 900_000;
+/// Not Sill's either: files both ways (see sill-linux's wire.py for the shapes).
+pub const FILE_START: u8 = 201;
+pub const FILE_DATA: u8 = 202;
+pub const FILE_END: u8 = 203;
+pub const FILE_REQUEST: u8 = 204;
+pub const FILE_STATUS: u8 = 205;
+pub const FILE_CANCEL: u8 = 206;
+pub const FILE_CHUNK: usize = 128 * 1024;
 
 pub const MAX_FRAME_PAYLOAD: usize = 32 << 20;
 pub const MAX_OTHER_PAYLOAD: usize = 4 << 20;
