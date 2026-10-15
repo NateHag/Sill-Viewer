@@ -41,7 +41,10 @@ the QR link, Bonjour (`_sill._tcp`).
 
 ## Downloads
 
-Ready-made viewers in the [downloads](downloads) folder:
+Ready-made files in the [downloads](downloads) folder:
+
+- **Linux host** (share a Linux desktop): [sill-linux-host.tar.gz](downloads/sill-linux-host.tar.gz).
+  Ubuntu with GNOME on Wayland. Unpack it, then in the `sill-linux-host` folder run `./install.sh`.
 
 - **Windows:** [SillViewer-windows.zip](downloads/SillViewer-windows.zip). Unzip it and run "Sill Viewer.exe".
 - **Linux:** [SillViewer-linux.tar.gz](downloads/SillViewer-linux.tar.gz). Needs FFmpeg 6 or later. Run `./sill-viewer`.
