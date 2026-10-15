@@ -34,7 +34,13 @@ the QR link, Bonjour (`_sill._tcp`).
 
 ## Downloads
 
-Every push builds the viewer for Windows, Mac and Linux (Actions tab, the run's artifacts).
+Ready-made viewers in the [downloads](downloads) folder:
+
+- **Windows:** [SillViewer-windows.zip](downloads/SillViewer-windows.zip). Unzip it and run "Sill Viewer.exe".
+- **Linux:** [SillViewer-linux.tar.gz](downloads/SillViewer-linux.tar.gz). Needs FFmpeg 6 or later. Run `./sill-viewer`.
+- **Mac:** build it with `viewer/build-mac.sh` (see [viewer/README.md](viewer/README.md)).
+
+Every push also builds the viewer for Windows, Mac and Linux (Actions tab, the run's artifacts).
 A tag such as `v0.2.0` makes a release with the downloads attached.
 
 ## Linux host: install
