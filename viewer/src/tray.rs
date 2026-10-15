@@ -109,6 +109,12 @@ impl Tray {
             if e.id.0 == "show" {
                 show_window(&c);
             }
+            // Quit right here, not through the window: a hidden window may never run the frame
+            // that would close it (Windows), and then the app could only be ended in Task Manager.
+            // The host notices the connection close and frees its stream.
+            if e.id.0 == "quit" {
+                std::process::exit(0);
+            }
             let _ = tx.send(e.id.0.clone());
             c.request_repaint();
         }));
