@@ -118,7 +118,11 @@ fn headless(a: &[String], id: identity::Identity) -> i32 {
     };
     println!("SESSION ok: {} ({})", s.peer_addr, identity::mac_id(&s.host_fp));
     decode::spawn(v_rx, shared.clone(), wake);
-    s.viewport(1280.0, 800.0, 60, opt("--pixels").and_then(|p| { let (w, h) = p.split_once('x')?; Some((w.parse().ok()?, h.parse().ok()?, opt("--scale").and_then(|v| v.parse().ok()).unwrap_or(1.0))) }));
+    let fps: u32 = opt("--fps").and_then(|v| v.parse().ok()).unwrap_or(60);
+    if fps > 60 {
+        s.send(wire::CHANGE_SETTINGS, &serde_json::json!({"token": 1, "maxFPS": fps}));
+    }
+    s.viewport(1280.0, 800.0, fps, opt("--pixels").and_then(|p| { let (w, h) = p.split_once('x')?; Some((w.parse().ok()?, h.parse().ok()?, opt("--scale").and_then(|v| v.parse().ok()).unwrap_or(1.0))) }));
     let start = Instant::now();
     let mut last = 0u64;
     let mut rtt = 0.0;

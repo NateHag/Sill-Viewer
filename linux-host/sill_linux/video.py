@@ -17,6 +17,7 @@ from gi.repository import GLib, Gst, GstVideo  # noqa: E402
 log = logging.getLogger("sill.video")
 
 ENCODERS = ["nvcudah265enc", "nvh265enc", "nvautogpuh265enc", "vah265enc", "vaapih265enc", "x265enc"]
+# (encoder, fps) pairs that failed: an encoder that cannot do 120 fps may still do 60.
 _bad_encoders = set()
 
 NAL_VPS, NAL_SPS, NAL_PPS, NAL_AUD = 32, 33, 34, 35
@@ -138,7 +139,7 @@ class Pipeline:
     def candidates(self):
         if self.forced_encoder:
             return [self.forced_encoder]
-        return [e for e in ENCODERS if e not in _bad_encoders and have(e)]
+        return [e for e in ENCODERS if (e, self.fps) not in _bad_encoders and have(e)]
 
     def start(self):
         kbps = max(1000, int(self.bitrate * self.fps / 60 / 1000))
@@ -170,7 +171,7 @@ class Pipeline:
             if r == Gst.StateChangeReturn.FAILURE:
                 errors.append(f"{enc}: could not start")
                 self._teardown()
-                _bad_encoders.add(enc)
+                _bad_encoders.add((enc, self.fps))
                 continue
             log.info("encoding with %s at %d kbps, %d fps", enc, kbps, self.fps)
             return True
@@ -199,7 +200,7 @@ class Pipeline:
             if self.frames == 0 and self.encoder and not self.forced_encoder and encoder_side:
                 if time.monotonic() - self.started < 10:
                     log.warning("encoder %s failed before its first frame; trying the next one", self.encoder)
-                    _bad_encoders.add(self.encoder)
+                    _bad_encoders.add((self.encoder, self.fps))
             self._teardown()
             self.on_failed(err.message)
         elif msg.type == Gst.MessageType.EOS:

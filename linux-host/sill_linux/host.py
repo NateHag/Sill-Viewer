@@ -106,6 +106,8 @@ class Host:
         self.pipeline = None
         self.running = None          # the Spec now running
         self.fail_count = 0
+        # Highest frame rate this computer's encoder managed; lowered when a faster one fails.
+        self.fps_limit = 120
         self.apply_pending = None
         self.idle_since = None
         self.last_frames = (0, time.monotonic())
@@ -362,7 +364,7 @@ class Host:
             return self.running      # the 10 s after the last device leaves: keep what runs, a quick return reuses it
         s = self.settings
         fps = max([x.fps for x in sessions] or [60])
-        fps = max(24, min(s["maxFPS"], fps))
+        fps = max(24, min(s["maxFPS"], fps, self.fps_limit))
         half = s["captureScale"] < 1.5
         base = dict(fps=fps, bitrate=s["bitrate"], speed=s["prioritizeSpeed"], scale_half=half,
                     cursor=self._cursor_in_video(sessions))
@@ -461,6 +463,8 @@ class Host:
         except Exception as e:
             log.error("could not start the stream: %s", e)
             self.pipeline = None
+            self._too_fast(spec)
+            self.fail_count += 1
             self._retry()
             return
         self.last_frames = (0, time.monotonic())
@@ -481,6 +485,8 @@ class Host:
         frames = self.pipeline.frames if self.pipeline else 0
         log.warning("stream stopped: %s", reason)
         self.fail_count = self.fail_count + 1 if frames == 0 else 0
+        if frames == 0 and self.running is not None:
+            self._too_fast(self.running)
         self._stop_stream()
         self._retry()
 
@@ -490,6 +496,13 @@ class Host:
             self.pipeline.stop()
             self.pipeline = None
         self._retry()
+
+    def _too_fast(self, spec):
+        """A stream above 60 fps that never gave a frame: this GPU's encoder cannot go that fast
+        (at this size). Stay at 60 from now on, instead of falling back to a slow software encoder."""
+        if spec.fps > 60 and self.fps_limit > 60:
+            self.fps_limit = 60
+            log.warning("the encoder cannot do %d fps here; using 60 fps", spec.fps)
 
     def _retry(self):
         delay = min(0.5 * (2 ** min(self.fail_count, 5)), 10)
