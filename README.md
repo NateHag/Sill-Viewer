@@ -4,6 +4,8 @@
 
 Sill today: **a Mac** shows its screen on **an iPhone or iPad**.
 
+In short: **Linux can now share its screen, and Windows, Mac and Linux PCs can now view.**
+
 This project adds:
 
 | | Before | With this project |
@@ -12,8 +14,6 @@ This project adds:
 | **Windows PCs** | Not supported | **Show a Mac or Linux screen on a Windows PC**, with your own mouse and keyboard. |
 | **Macs** | Only share their screen | **Also show another Mac or Linux screen**, in a window. |
 | **Linux viewer** | Not supported | **Show a Mac or Linux screen on a Linux PC.** |
-
-In short: **Linux can now share its screen, and Windows, Mac and Linux PCs can now view.**
 
 > **Unofficial.** This is an independent companion project. It is not made by, or affiliated with,
 > the Sill team. "Sill" names the app it works with. If the Sill author prefers another name,
