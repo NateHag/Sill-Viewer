@@ -129,7 +129,8 @@ impl App {
                 st.fit = live.settings.as_ref().filter(|v| v["virtualDisplayAvailable"] == true)
                     .map(|v| v["settings"]["virtualDisplay"] == true);
                 st.fullscreen = live.fullscreen;
-                st.match_screen = live.settings.as_ref().filter(|v| v["virtualDisplayAvailable"] == true)
+                // Only sill-linux makes a virtual screen with exact pixels; Sill on a Mac does not.
+                st.match_screen = live.settings.as_ref().filter(|v| v["pixelMatch"] == true)
                     .map(|_| live.match_screen);
             }
             Screen::Connecting(t) => st.status = format!("Connecting to {}…", t.name),
@@ -654,7 +655,7 @@ fn stream(ctx: &egui::Context, live: &mut Live, target: &Target) -> Option<Strin
                         }
                     }
                     if st["virtualDisplayAvailable"] == true {
-                        if ui.selectable_label(live.match_screen, "Match this screen")
+                        if st["pixelMatch"] == true && ui.selectable_label(live.match_screen, "Match this screen")
                             .on_hover_text("Full screen, on a virtual screen with exactly this monitor's resolution").clicked() {
                             toggle_match(ctx, live);
                         }

@@ -177,7 +177,7 @@ class Host:
         s = self.settings
         state = {"settings": {"maxFPS": s["maxFPS"], "bitrate": s["bitrate"], "captureScale": s["captureScale"],
                               "prioritizeSpeed": s["prioritizeSpeed"], "virtualDisplay": s["virtualDisplay"]},
-                 "persistent": True, "virtualDisplayAvailable": self.mutter,
+                 "persistent": True, "virtualDisplayAvailable": self.mutter, "pixelMatch": self.mutter,
                  "softwareEncoder": bool(self.pipeline and self.pipeline.encoder == "x265enc")}
         if not self.mutter:
             state["virtualDisplayNote"] = "Needs GNOME on Wayland."
