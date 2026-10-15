@@ -26,6 +26,8 @@ In the stream window
   The host also uses your screen's scale (a Retina Mac: 200%), so text keeps its normal size.
   On sill-linux the virtual screen replaces the computer's own monitors while you match: your
   windows and icons move to it, and its monitors go dark until you leave Match or disconnect.
+- Zoom (the % menu): Fit, or 100% to 200%, where 100% is one remote pixel per screen pixel.
+  Above Fit, the picture follows the pointer: move to an edge to see that part.
 - Full screen: click "Full screen" (Mac: the green window button). Ctrl+Alt+Shift+F leaves it.
 - Files (sill-linux hosts): drop files or folders on the window to send them to the computer's
   Downloads folder. To get files from it, copy them there (Ctrl+C in Files), then click

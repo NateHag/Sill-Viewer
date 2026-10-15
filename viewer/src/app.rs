@@ -18,6 +18,19 @@ use std::time::{Duration, Instant};
 
 use crate::tray::PRESETS;
 
+/// Zoom, in percent of one picture pixel per screen pixel; 0 = fit the window. Kept between runs.
+static ZOOM: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+const ZOOMS: [(u32, &str); 6] = [(0, "Fit"), (100, "100%"), (125, "125%"), (150, "150%"), (175, "175%"), (200, "200%")];
+
+fn zoom() -> u32 {
+    ZOOM.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+fn set_zoom(z: u32) {
+    ZOOM.store(z, std::sync::atomic::Ordering::Relaxed);
+    let _ = std::fs::write(identity::config_dir().join("zoom.txt"), z.to_string());
+}
+
 #[derive(Clone)]
 struct Target {
     name: String,
@@ -45,6 +58,8 @@ struct Live {
     switch_to: Option<String>,
     /// The last file transfer note, and when it came.
     note: Option<(String, Instant)>,
+    /// Where a zoomed picture is panned to, as fractions (follows the pointer).
+    pan: (f32, f32),
     settings: Option<Value>,
     rtt: f64,
     sent_viewport: (f32, f32, u32, u32, u32),
@@ -85,6 +100,9 @@ impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, id: Identity) -> App {
         if let Some(rs) = cc.wgpu_render_state.as_ref() {
             render::init(rs);
+        }
+        if let Some(z) = std::fs::read_to_string(identity::config_dir().join("zoom.txt")).ok().and_then(|t| t.trim().parse().ok()) {
+            ZOOM.store(z, std::sync::atomic::Ordering::Relaxed);
         }
         cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
         let ctx = cc.egui_ctx.clone();
@@ -250,7 +268,7 @@ impl App {
             let r = Session::start(&t.addr, &id, pin, ev_tx, v_tx, wake.clone()).map(|session| {
                 decode::spawn(v_rx, shared.clone(), wake.clone());
                 Box::new(Live {
-                    session, events: ev_rx, shared, windows: vec![], active: json!({"none": {}}), mac_name: t.name.clone(), machines: vec![], switch_to: None, note: None,
+                    session, events: ev_rx, shared, windows: vec![], active: json!({"none": {}}), mac_name: t.name.clone(), machines: vec![], switch_to: None, note: None, pan: (0.5, 0.5),
                     settings: None, rtt: 0.0, sent_viewport: (0.0, 0.0, 0, 0, 0), match_screen: false, sent_mods: Modifiers::NONE,
                     buttons_down: vec![], scroll_open: None, last_pos: (0.5, 0.5), token: 0, fps: 60,
                     cursor_in_video: false, fullscreen: false, os_fullscreen: None,
@@ -647,6 +665,18 @@ fn stream(ctx: &egui::Context, live: &mut Live, target: &Target) -> Option<Strin
                     if ui.selectable_label(retina, "Sharp").on_hover_text("Full resolution (Retina). Off: half, for slow links.").clicked() {
                         setting(live, "captureScale", json!(if retina { 1.0 } else { 2.0 }));
                     }
+                    let z = zoom();
+                    egui::ComboBox::from_id_salt("zoom")
+                        .selected_text(ZOOMS.iter().find(|x| x.0 == z).map_or(format!("{z}%"), |x| x.1.to_string()))
+                        .width(60.0)
+                        .show_ui(ui, |ui| {
+                            for (v, name) in ZOOMS {
+                                if ui.selectable_label(v == z, name).clicked() {
+                                    set_zoom(v);
+                                }
+                            }
+                        })
+                        .response.on_hover_text("Zoom. 100%: one remote pixel per screen pixel. Above Fit, move the pointer to an edge to see more.");
                     let fps120 = live.fps == 120;
                     if ui.selectable_label(fps120, "120 fps").clicked() {
                         live.fps = if fps120 { 60 } else { 120 };
@@ -691,15 +721,28 @@ fn stream(ctx: &egui::Context, live: &mut Live, target: &Target) -> Option<Strin
     egui::CentralPanel::default().frame(egui::Frame::none().fill(Color32::BLACK)).show(ctx, |ui| {
         let avail = ui.available_rect_before_wrap();
         let (vw, vh) = live.shared.lock().unwrap().size;
+        // The whole picture's rectangle: fitted, or zoomed (then larger than the window, and panned
+        // so the part under the pointer shows: the pointer's place in the window is its place in
+        // the picture, so moving across the window reaches every corner of the remote screen).
         let rect = if vw > 0 && vh > 0 {
-            let s = (avail.width() / vw as f32).min(avail.height() / vh as f32);
-            Rect::from_center_size(avail.center(), Vec2::new(vw as f32 * s, vh as f32 * s))
+            let fit = (avail.width() / vw as f32).min(avail.height() / vh as f32);
+            let s = if zoom() == 0 { fit } else { zoom() as f32 / 100.0 / ctx.pixels_per_point() };
+            let size = Vec2::new(vw as f32 * s, vh as f32 * s);
+            if let Some(p) = ctx.input(|i| i.pointer.hover_pos()).filter(|p| avail.contains(*p)) {
+                live.pan = ((p.x - avail.min.x) / avail.width(), (p.y - avail.min.y) / avail.height());
+            }
+            let x = if size.x <= avail.width() { avail.center().x - size.x / 2.0 } else { avail.min.x - live.pan.0 * (size.x - avail.width()) };
+            let y = if size.y <= avail.height() { avail.center().y - size.y / 2.0 } else { avail.min.y - live.pan.1 * (size.y - avail.height()) };
+            Rect::from_min_size(Pos2::new(x, y), size)
         } else {
             avail
         };
+        let shown = rect.intersect(avail);
+        let crop = [(shown.min.x - rect.min.x) / rect.width(), (shown.min.y - rect.min.y) / rect.height(),
+                    (shown.max.x - rect.min.x) / rect.width(), (shown.max.y - rect.min.y) / rect.height()];
         let resp = ui.allocate_rect(avail, egui::Sense::click_and_drag());
-        if vw > 0 {
-            ui.painter().add(egui_wgpu::Callback::new_paint_callback(rect, VideoCallback { shared: live.shared.clone() }));
+        if vw > 0 && shown.width() > 0.0 && shown.height() > 0.0 {
+            ui.painter().add(egui_wgpu::Callback::new_paint_callback(shown, VideoCallback { shared: live.shared.clone(), crop }));
         } else {
             let msg = if crate::decode::HW_HUNG.load(std::sync::atomic::Ordering::Relaxed) {
                 "The graphics card's video decoder stopped answering.\nClose Sill Viewer and open it again: it will decode in software."

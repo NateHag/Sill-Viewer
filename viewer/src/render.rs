@@ -6,7 +6,7 @@ use eframe::egui_wgpu::{self, wgpu, CallbackTrait};
 use std::sync::{Arc, Mutex};
 
 const SHADER: &str = r#"
-struct U { fmt: u32, full: u32, a: u32, b: u32 };
+struct U { fmt: u32, full: u32, a: u32, b: u32, crop: vec4<f32> };
 @group(0) @binding(0) var ty: texture_2d<f32>;
 @group(0) @binding(1) var t1: texture_2d<f32>;
 @group(0) @binding(2) var t2: texture_2d<f32>;
@@ -17,7 +17,8 @@ struct VO { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };
     var p = array<vec2<f32>, 3>(vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0));
     var o: VO;
     o.pos = vec4(p[i], 0.0, 1.0);
-    o.uv = vec2((p[i].x + 1.0) * 0.5, 1.0 - (p[i].y + 1.0) * 0.5);
+    let t = vec2((p[i].x + 1.0) * 0.5, 1.0 - (p[i].y + 1.0) * 0.5);
+    o.uv = u.crop.xy + t * (u.crop.zw - u.crop.xy);   // the part of the picture on screen (zoom)
     return o;
 }
 @fragment fn fs(v: VO) -> @location(0) vec4<f32> {
@@ -86,7 +87,7 @@ pub fn init(rs: &egui_wgpu::RenderState) {
             },
             wgpu::BindGroupLayoutEntry {
                 binding: 4,
-                visibility: wgpu::ShaderStages::FRAGMENT,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,   // the vertex stage reads the crop
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
@@ -124,7 +125,7 @@ pub fn init(rs: &egui_wgpu::RenderState) {
     });
     let uniform = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("yuv"),
-        size: 16,
+        size: 32,
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
@@ -155,11 +156,16 @@ fn upload(queue: &wgpu::Queue, tex: &wgpu::Texture, data: &[u8], w: u32, h: u32,
 
 pub struct VideoCallback {
     pub shared: Arc<Mutex<Shared>>,
+    /// The part of the picture to draw, as (u0, v0, u1, v1) in 0..1: all of it, or the zoomed part.
+    pub crop: [f32; 4],
 }
 
 impl CallbackTrait for VideoCallback {
     fn prepare(&self, device: &wgpu::Device, queue: &wgpu::Queue, _sd: &egui_wgpu::ScreenDescriptor,
                _enc: &mut wgpu::CommandEncoder, res: &mut egui_wgpu::CallbackResources) -> Vec<wgpu::CommandBuffer> {
+        if let Some(r) = res.get::<Resources>() {
+            queue.write_buffer(&r.uniform, 16, bytemuck::cast_slice(&self.crop));
+        }
         let Some(pic) = self.shared.lock().unwrap().latest.take() else { return Vec::new() };
         let Some(r) = res.get_mut::<Resources>() else { return Vec::new() };
         let (cw, ch) = ((pic.width + 1) / 2, (pic.height + 1) / 2);
