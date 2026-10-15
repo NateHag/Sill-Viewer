@@ -6,6 +6,7 @@ virtual monitor of any size (RecordVirtual) into a PipeWire stream. No portal di
 display driver, no X11.
 """
 import logging
+import threading
 
 from gi.repository import Gio, GLib
 
@@ -114,6 +115,27 @@ def watch_monitors(bus, callback):
                                 lambda *a: callback())
 
 
+TEXT_MIMES = ["text/plain;charset=utf-8", "UTF8_STRING", "text/plain", "STRING", "TEXT"]
+
+
+def _read_all(fd, limit, timeout=3.0):
+    """Reads a pipe to its end (at most `limit` bytes), then closes it."""
+    import os, select
+    out = bytearray()
+    try:
+        while len(out) <= limit:
+            r, _, _ = select.select([fd], [], [], timeout)
+            if not r:
+                break
+            b = os.read(fd, 65536)
+            if not b:
+                break
+            out += b
+    finally:
+        os.close(fd)
+    return bytes(out) if len(out) <= limit else None
+
+
 class Capture:
     """One RemoteDesktop session with one ScreenCast stream. Call from the GLib main thread.
 
@@ -181,6 +203,86 @@ class Capture:
             self._call(RD_BUS, self.rd_path, RD_SESSION, "Stop", None, None)
         except GLib.Error as e:
             log.debug("stop: %s", e.message)
+
+    # --- clipboard ------------------------------------------------------------------------------
+    def enable_clipboard(self, on_text, limit):
+        """Shares the clipboard: on_text(str) runs (on a worker thread) when an app on this computer
+        copies text; set_text() makes text the clipboard here. Call after the session started."""
+        self.on_clip, self.clip_limit, self.clip_bytes = on_text, limit, None
+        self.subs.append(self.bus.signal_subscribe(None, RD_SESSION, "SelectionOwnerChanged", self.rd_path, None,
+                                                   Gio.DBusSignalFlags.NONE, self._owner_changed))
+        self.subs.append(self.bus.signal_subscribe(None, RD_SESSION, "SelectionTransfer", self.rd_path, None,
+                                                   Gio.DBusSignalFlags.NONE, self._transfer))
+        try:
+            self._call(RD_BUS, self.rd_path, RD_SESSION, "EnableClipboard", GLib.Variant("(a{sv})", ({},)), None)
+            return True
+        except GLib.Error as e:
+            log.warning("clipboard sharing is off: %s", e.message)
+            return False
+
+    def _owner_changed(self, _c, _s, _p, _i, _sig, params):
+        opts = params.unpack()[0]
+        mimes = opts.get("mime-types") or []
+        if isinstance(mimes, tuple):
+            mimes = mimes[0] if mimes else []
+        if self.closed or opts.get("session-is-owner") or not mimes:
+            return
+        mime = next((m for m in TEXT_MIMES if m in mimes), None)
+        if mime is None:
+            return
+        threading.Thread(target=self._read_selection, args=(mime,), daemon=True).start()
+
+    def _read_selection(self, mime):
+        try:
+            r, fds = self.bus.call_with_unix_fd_list_sync(
+                RD_BUS, self.rd_path, RD_SESSION, "SelectionRead", GLib.Variant("(s)", (mime,)),
+                GLib.VariantType("(h)"), Gio.DBusCallFlags.NONE, 5000, None, None)
+            data = _read_all(fds.get(r.unpack()[0]), self.clip_limit)
+        except GLib.Error as e:
+            log.debug("clipboard read: %s", e.message)
+            return
+        if data is None:
+            log.info("clipboard: too big to share")
+            return
+        text = data.decode("utf-8", "replace")
+        if text and self.on_clip:
+            self.on_clip(text)
+
+    def set_text(self, text):
+        """Any thread. Offers `text` as the clipboard; GNOME asks for it when an app pastes."""
+        if self.closed:
+            return
+        self.clip_bytes = text.encode("utf-8")
+        self.bus.call(RD_BUS, self.rd_path, RD_SESSION, "SetSelection",
+                      GLib.Variant("(a{sv})", ({"mime-types": GLib.Variant("as", TEXT_MIMES)},)),
+                      None, Gio.DBusCallFlags.NONE, 5000, None, None)
+
+    def _transfer(self, _c, _s, _p, _i, _sig, params):
+        _mime, serial = params.unpack()
+        threading.Thread(target=self._write_selection, args=(serial,), daemon=True).start()
+
+    def _write_selection(self, serial):
+        import os
+        ok = False
+        try:
+            if self.clip_bytes is not None:
+                r, fds = self.bus.call_with_unix_fd_list_sync(
+                    RD_BUS, self.rd_path, RD_SESSION, "SelectionWrite", GLib.Variant("(u)", (serial,)),
+                    GLib.VariantType("(h)"), Gio.DBusCallFlags.NONE, 5000, None, None)
+                fd = fds.get(r.unpack()[0])
+                try:
+                    view = memoryview(self.clip_bytes)
+                    while view:
+                        view = view[os.write(fd, view):]
+                    ok = True
+                finally:
+                    os.close(fd)
+        except (GLib.Error, OSError) as e:
+            log.debug("clipboard write: %s", e)
+        try:
+            self._call(RD_BUS, self.rd_path, RD_SESSION, "SelectionWriteDone", GLib.Variant("(ub)", (serial, ok)), None)
+        except GLib.Error as e:
+            log.debug("clipboard write done: %s", e.message)
 
     # --- input (any thread) --------------------------------------------------------------------
     def _fire(self, method, sig, args):

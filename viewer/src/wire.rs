@@ -19,6 +19,10 @@ pub const PAIR_REQUEST: u8 = 19;
 pub const PAIR_RESULT: u8 = 20;
 pub const GOODBYE: u8 = 22;
 pub const HELLO: u8 = 23;
+/// Not Sill's: sill-linux and Sill Viewer only. JSON {"text": "..."} both ways: the clipboard
+/// changed on this side. Sill's own apps skip kinds they do not know.
+pub const CLIPBOARD: u8 = 200;
+pub const MAX_CLIPBOARD_TEXT: usize = 900_000;
 
 pub const MAX_FRAME_PAYLOAD: usize = 32 << 20;
 pub const MAX_OTHER_PAYLOAD: usize = 4 << 20;

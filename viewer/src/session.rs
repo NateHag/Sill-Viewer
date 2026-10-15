@@ -5,8 +5,8 @@ use crate::tls::{self, TlsConn};
 use crate::wire;
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::mpsc::Sender;
-use std::sync::Arc;
+use std::sync::mpsc::{channel, Sender};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 pub enum Event {
@@ -28,6 +28,11 @@ pub struct VideoPacket {
 pub struct Session {
     conn: Arc<TlsConn>,
     alive: Arc<AtomicBool>,
+    /// True while this window has the keyboard focus: only then does this computer's clipboard go
+    /// to the host (so text copied while working in other apps stays here until you come back).
+    pub focused: Arc<AtomicBool>,
+    /// The clipboard text both sides have, so neither sends it back.
+    clip_last: Arc<Mutex<Option<String>>>,
     pub frames: Arc<AtomicU32>,
     pub host_fp: [u8; 32],
     pub peer_addr: String,
@@ -43,6 +48,9 @@ impl Session {
         let alive = Arc::new(AtomicBool::new(true));
         let frames = Arc::new(AtomicU32::new(0));
         let start = Instant::now();
+        let focused = Arc::new(AtomicBool::new(true));
+        let clip_last = Arc::new(Mutex::new(None::<String>));
+        let (clip_tx, clip_rx) = channel::<String>();
 
         {
             let (conn, alive, frames, wake) = (conn.clone(), alive.clone(), frames.clone(), wake.clone());
@@ -83,6 +91,13 @@ impl Session {
                                 let _ = events.send(Event::Rtt((start.elapsed().as_secs_f64() - sent) * 1000.0));
                             }
                         }
+                        wire::CLIPBOARD => {
+                            if let Ok(v) = serde_json::from_slice::<Value>(&m.payload) {
+                                if let Some(t) = v["text"].as_str() {
+                                    let _ = clip_tx.send(t.to_string());
+                                }
+                            }
+                        }
                         _ => {} // ticks, icons, thumbnails, cursor shapes, menus: not used here
                     }
                     alive.load(Ordering::Relaxed)
@@ -103,9 +118,41 @@ impl Session {
                 }
             }).map_err(|e| e.to_string())?;
         }
+        {
+            // The clipboard: text from the host goes on this computer's clipboard; text copied
+            // here goes to the host (checked twice a second, while this window has the focus).
+            let (conn, alive, focused, last) = (conn.clone(), alive.clone(), focused.clone(), clip_last.clone());
+            std::thread::Builder::new().name("clipboard".into()).spawn(move || {
+                let mut cb = match arboard::Clipboard::new() {
+                    Ok(c) => c,
+                    Err(e) => {
+                        log::warn!("clipboard sharing is off: {e}");
+                        return;
+                    }
+                };
+                while alive.load(Ordering::Relaxed) {
+                    match clip_rx.recv_timeout(Duration::from_millis(500)) {
+                        Ok(text) => {
+                            *last.lock().unwrap() = Some(text.clone());
+                            if let Err(e) = cb.set_text(text) {
+                                log::warn!("clipboard: {e}");
+                            }
+                        }
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                            if focused.load(Ordering::Relaxed) {
+                                if let Ok(t) = cb.get_text() {
+                                    offer(&conn, &last, &t);
+                                }
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+            }).map_err(|e| e.to_string())?;
+        }
         let host_fp = conn.peer_fp;
         let peer_addr = conn.peer_addr.clone();
-        Ok(Session { conn, alive, frames, host_fp, peer_addr })
+        Ok(Session { conn, alive, focused, clip_last, frames, host_fp, peer_addr })
     }
 
     pub fn send(&self, kind: u8, v: &Value) {
@@ -130,6 +177,14 @@ impl Session {
         self.send(wire::VIEWPORT, &v);
     }
 
+    /// Sends `text` as the clipboard now, if the host does not have it yet. Called on a paste, so
+    /// the host has the newest text before the paste keys arrive.
+    pub fn offer_clipboard(&self, text: &str) {
+        if self.alive.load(Ordering::Relaxed) {
+            offer(&self.conn, &self.clip_last, text);
+        }
+    }
+
     pub fn input(&self, v: Value) {
         self.send(wire::INPUT, &v);
     }
@@ -144,4 +199,16 @@ impl Drop for Session {
     fn drop(&mut self) {
         self.stop();
     }
+}
+
+fn offer(conn: &TlsConn, last: &Mutex<Option<String>>, text: &str) {
+    if text.is_empty() || text.len() > wire::MAX_CLIPBOARD_TEXT {
+        return;
+    }
+    let mut l = last.lock().unwrap();
+    if l.as_deref() == Some(text) {
+        return;
+    }
+    *l = Some(text.to_string());
+    let _ = conn.send(&wire::json(wire::CLIPBOARD, &json!({"text": text})));
 }

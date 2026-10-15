@@ -51,6 +51,9 @@ struct Live {
     fps: u32,
     cursor_in_video: bool,
     fullscreen: bool,
+    /// The window's real full screen state, as last seen: the OS can change it (the Mac's green
+    /// button, Ctrl+Cmd+F, F11 on Linux), and then the app follows.
+    os_fullscreen: Option<bool>,
 }
 
 enum Screen {
@@ -233,7 +236,7 @@ impl App {
                     session, events: ev_rx, shared, windows: vec![], active: json!({"none": {}}), mac_name: t.name.clone(),
                     settings: None, rtt: 0.0, sent_viewport: (0.0, 0.0, 0, 0, 0), match_screen: false, sent_mods: Modifiers::NONE,
                     buttons_down: vec![], scroll_open: None, last_pos: (0.5, 0.5), token: 0, fps: 60,
-                    cursor_in_video: false, fullscreen: false,
+                    cursor_in_video: false, fullscreen: false, os_fullscreen: None,
                 })
             });
             let _ = tx.send(Task::Connected(r, t));
@@ -523,6 +526,21 @@ fn stream(ctx: &egui::Context, live: &mut Live, target: &Target) -> Option<Strin
     }
     let mut leave = None;
 
+    live.session.focused.store(ctx.input(|i| i.focused), std::sync::atomic::Ordering::Relaxed);
+
+    // Follow a full screen change made outside the app (the green button on a Mac).
+    if let Some(now) = ctx.input(|i| i.viewport().fullscreen) {
+        if live.os_fullscreen != Some(now) {
+            live.os_fullscreen = Some(now);
+            if now != live.fullscreen {
+                live.fullscreen = now;
+                if !now && live.match_screen {
+                    toggle_match(ctx, live);   // leaving full screen also leaves Match this screen
+                }
+            }
+        }
+    }
+
     if !live.fullscreen {
         egui::TopBottomPanel::top("bar").show(ctx, |ui| {
             ui.horizontal(|ui| {
@@ -582,7 +600,8 @@ fn stream(ctx: &egui::Context, live: &mut Live, target: &Target) -> Option<Strin
                     if ui.button("Disconnect").clicked() {
                         leave = Some(String::new());
                     }
-                    if ui.button("Full screen").on_hover_text("Ctrl+Alt+Shift+F leaves it").clicked() {
+                    // A Mac has its own full screen button (the green one), so no second one here.
+                    if !cfg!(target_os = "macos") && ui.button("Full screen").on_hover_text("Ctrl+Alt+Shift+F leaves it").clicked() {
                         live.fullscreen = true;
                         ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(true));
                     }
@@ -710,7 +729,10 @@ fn handle_input(ctx: &egui::Context, live: &mut Live, rect: Rect, over: bool, le
             // The platform turned these shortcuts into clipboard events: send the keys they were.
             egui::Event::Copy => tap(live, egui::Key::C, &mods),
             egui::Event::Cut => tap(live, egui::Key::X, &mods),
-            egui::Event::Paste(_) => tap(live, egui::Key::V, &mods),
+            egui::Event::Paste(text) => {
+                live.session.offer_clipboard(&text);   // the host gets the newest text before the keys
+                tap(live, egui::Key::V, &mods)
+            }
             _ => {}
         }
     }

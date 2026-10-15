@@ -11,6 +11,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 rcgen = { version = "0.13", default-features = false, features = ["ring", "pem"] }
 x509-parser = "0.16"
 if-addrs = "0.13"
+arboard = { version = "3", default-features = false }
 mdns-sd = "0.11"
 ffmpeg-next = "9.0"
 sha2 = "0.10"

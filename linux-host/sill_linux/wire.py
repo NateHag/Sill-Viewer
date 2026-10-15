@@ -41,6 +41,10 @@ PRESS_MENU_ITEM = 25
 MAC_POINTER = 26
 FETCH_MENU = 27
 GESTURE = 28
+# Not Sill's: sill-linux and Sill Viewer only. JSON {"text": "..."} both ways: the clipboard
+# changed on this side. Sill's own apps skip kinds they do not know.
+CLIPBOARD = 200
+MAX_CLIPBOARD_TEXT = 900_000
 
 MAX_CLIENT_PAYLOAD = 1 << 20
 MAX_PAIRING_PAYLOAD = 4096

@@ -272,7 +272,36 @@ class Host:
             log.debug("%s: %s fps, frame age %s ms, rtt %s ms", s, st.get("fps"), st.get("frameAgeMs"), st.get("rttMs"))
         elif kind == wire.PAIRING_WANTED:
             self.pairing.open_window()
+        elif kind == wire.CLIPBOARD:
+            self._clipboard_from_device(s, json.loads(payload))
         # kinds 7, 15, 25, 27, 28 and unknown ones are skipped: no apps, menus or gestures here
+
+    # --- clipboard: text both ways, while a session streams --------------------------------------
+    def _clipboard_from_device(self, s, msg):
+        text = msg.get("text") if isinstance(msg, dict) else None
+        if not isinstance(text, str) or not text or len(text) > wire.MAX_CLIPBOARD_TEXT:
+            return
+        self.clip_last = text
+        self.clip_from = s
+        cap = self.capture
+        if cap is not None:
+            cap.set_text(text)
+        # Other viewers get it too, so every screen pastes the same thing.
+        msg = wire.jmsg(wire.CLIPBOARD, {"text": text})
+        with self.lock:
+            others = [x for x in self.sessions if x is not s]
+        for x in others:
+            x.send(msg)
+
+    def _clipboard_from_here(self, text):
+        if text == getattr(self, "clip_last", None):
+            return      # our own text coming back, or no change
+        self.clip_last = text
+        msg = wire.jmsg(wire.CLIPBOARD, {"text": text})
+        with self.lock:
+            sessions = list(self.sessions)
+        for x in sessions:
+            x.send(msg)
 
     def _select(self, src):
         if not isinstance(src, dict) or len(src) != 1:
@@ -383,6 +412,10 @@ class Host:
             self.capture = mutter.Capture(self.bus, monitor=spec.connector, virtual=spec.virtual, cursor_mode=cursor,
                                           on_ready=lambda node: self._start_pipeline(spec, self._pipewire(node, spec)),
                                           on_closed=self._capture_closed)
+            if self.capture.enable_clipboard(self._clipboard_from_here, wire.MAX_CLIPBOARD_TEXT):
+                last = getattr(self, "clip_last", None)
+                if last and getattr(self, "clip_from", None) is not None:
+                    self.capture.set_text(last)   # a new stream keeps what the viewer copied
         except GLib.Error as e:
             log.error("screen cast: %s", e.message)
             self.capture = None
