@@ -1,5 +1,9 @@
 # Sill Desktop
 
+> **Unofficial.** This is an independent companion project. It is not made by, or affiliated with,
+> the Sill team. "Sill" names the app it works with. If the Sill author prefers another name,
+> this project will be renamed.
+
 Two additions to [Sill](https://github.com/Saffsanity/sill), the open-source app that shows a Mac's
 windows on an iPhone or iPad:
 

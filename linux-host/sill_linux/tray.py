@@ -125,7 +125,7 @@ class Tray:
         title = {"paused": "Sharing is paused",
                  "live": f"Sharing with {len(sessions)} device{'s' if len(sessions) != 1 else ''}",
                  "idle": "Waiting for a device"}[state]
-        self.item(menu, f"Sill · {st.get('name')}")
+        self.item(menu, f"Sill for Linux (unofficial) · {st.get('name')}")
         self.item(menu, title)
         stream = st.get("settings", {}).get("stream")
         if stream and sessions:

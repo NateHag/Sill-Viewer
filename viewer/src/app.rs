@@ -316,6 +316,7 @@ impl App {
         let mut pick = None;
         ui.add_space(16.0);
         ui.heading("Sill Viewer");
+        ui.label(RichText::new("An unofficial companion to Sill (getsill.app). Not made by the Sill team.").weak().small());
         ui.label("Computers that run a Sill host on this network:");
         ui.add_space(8.0);
         let found = self.browser.found.lock().unwrap().clone();

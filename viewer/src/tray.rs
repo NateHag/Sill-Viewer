@@ -98,7 +98,7 @@ impl Tray {
         let icon = TrayIconBuilder::new()
             .with_menu(Box::new(menu))
             .with_icon(icon())
-            .with_tooltip("Sill Viewer")
+            .with_tooltip("Sill Viewer (unofficial)")
             .with_menu_on_left_click(false)
             .build()
             .map_err(|e| e.to_string())?;

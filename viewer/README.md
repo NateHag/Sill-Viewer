@@ -1,6 +1,9 @@
 Sill Viewer
 ===========
 
+An unofficial companion to Sill (https://getsill.app, https://github.com/Saffsanity/sill).
+It is not made by the Sill team. "Sill" names the app this viewer works with.
+
 A desktop app for Mac, Windows and Linux. It shows a computer that runs a Sill host:
 a Mac with Sill, or Linux with sill-linux. You use it with your own mouse and keyboard.
 

@@ -1,5 +1,7 @@
 # Sill for Linux
 
+> Unofficial: an independent companion to [Sill](https://getsill.app), not made by the Sill team.
+
 A Linux host for the [Sill](https://github.com/Saffsanity/sill) iPhone and iPad app. Your Ubuntu
 desktop shows up in the Sill app from the App Store, like a Mac does.
 

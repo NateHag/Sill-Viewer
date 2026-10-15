@@ -46,7 +46,7 @@ fn main() {
         std::process::exit(headless(&args[i + 1..], id));
     }
     let options = eframe::NativeOptions {
-        viewport: eframe::egui::ViewportBuilder::default().with_title("Sill Viewer").with_inner_size([1280.0, 800.0]),
+        viewport: eframe::egui::ViewportBuilder::default().with_title("Sill Viewer (unofficial)").with_inner_size([1280.0, 800.0]),
         renderer: eframe::Renderer::Wgpu,
         vsync: false,
         ..Default::default()
