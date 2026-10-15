@@ -13,6 +13,12 @@
 set -e
 cd "$(dirname "$0")"
 
+# A new Homebrew is not on the PATH until the shell restarts: look in its usual places.
+if ! command -v brew >/dev/null; then
+    for b in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+        [ -x "$b" ] && eval "$("$b" shellenv)" && break
+    done
+fi
 if ! command -v brew >/dev/null; then
     echo "Homebrew is needed first: https://brew.sh"
     exit 1
