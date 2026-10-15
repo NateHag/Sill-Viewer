@@ -1,8 +1,25 @@
 # Sill Desktop
 
+## What this adds to Sill
+
+Sill today: **a Mac** shows its screen on **an iPhone or iPad**.
+
+This project adds:
+
+| | Before | With this project |
+|---|---|---|
+| **Linux computers** | Not supported | **Show a Linux desktop on your iPhone or iPad**, in the normal Sill app from the App Store. No app change needed. |
+| **Windows PCs** | Not supported | **Show a Mac or Linux screen on a Windows PC**, with your own mouse and keyboard. |
+| **Macs** | Only share their screen | **Also show another Mac or Linux screen**, in a window. |
+| **Linux viewer** | Not supported | **Show a Mac or Linux screen on a Linux PC.** |
+
+In short: **Linux can now share its screen, and Windows, Mac and Linux PCs can now view.**
+
 > **Unofficial.** This is an independent companion project. It is not made by, or affiliated with,
 > the Sill team. "Sill" names the app it works with. If the Sill author prefers another name,
 > this project will be renamed.
+
+## The two parts
 
 Two additions to [Sill](https://github.com/Saffsanity/sill), the open-source app that shows a Mac's
 windows on an iPhone or iPad:
