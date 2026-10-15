@@ -1,0 +1,100 @@
+name: Build the viewer
+
+# Builds Sill Viewer for Windows, Mac and Linux on every push. A tag such as v0.2.0 also makes a
+# GitHub release with the three downloads attached.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq mingw-w64 mingw-w64-tools clang libclang-dev wine64 zip python3-pip
+          rustup target add x86_64-pc-windows-gnu
+          # The FFmpeg crate runs a small Windows test program while it builds: run .exe files with Wine.
+          sudo mount binfmt_misc -t binfmt_misc /proc/sys/fs/binfmt_misc || true
+          echo ':DOSWin:M::MZ::/usr/bin/wine:' | sudo tee /proc/sys/fs/binfmt_misc/register
+          WINEDEBUG=-all wineboot -i || true
+      - name: FFmpeg for Windows
+        run: viewer/scripts/prepare-ffmpeg-windows.sh "$RUNNER_TEMP/ffmpeg-win"
+      - name: Build
+        working-directory: viewer
+        run: FFMPEG_WIN="$RUNNER_TEMP/ffmpeg-win" ./build-windows.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SillViewer-windows
+          path: viewer/target/SillViewer-windows.zip
+
+  mac:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        working-directory: viewer
+        run: |
+          ./build-mac.sh
+          cd target && ditto -c -k --keepParent "Sill Viewer.app" SillViewer-mac.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SillViewer-mac
+          path: viewer/target/SillViewer-mac.zip
+
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Libraries
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
+            libavdevice-dev libavfilter-dev clang libclang-dev pkg-config
+      - name: Build
+        working-directory: viewer
+        run: |
+          cargo build --release
+          mkdir -p target/sill-viewer-linux
+          cp target/release/sill-viewer README.md target/sill-viewer-linux/
+          tar -C target -czf target/sill-viewer-linux.tar.gz sill-viewer-linux
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sill-viewer-linux
+          path: viewer/target/sill-viewer-linux.tar.gz
+
+  host:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the Linux host
+        run: |
+          python3 -m pip install --quiet pyflakes
+          python3 -m pyflakes linux-host/sill_linux || true
+          bash -n linux-host/install.sh
+          tar -czf sill-linux.tar.gz -C . linux-host
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sill-linux
+          path: sill-linux.tar.gz
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, mac, linux, host]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
