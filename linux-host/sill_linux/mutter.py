@@ -245,27 +245,30 @@ class Capture:
 
     def copied_paths(self):
         """Any thread but the main one (it waits for GNOME). The local paths of the files copied
-        on this computer (Ctrl+C in Files), or [] when what is copied is not files."""
+        on this computer (Ctrl+C in Files), or [] when what is copied is not files. Asks GNOME
+        each time, so it does not depend on having seen the copy happen."""
         from urllib.parse import unquote, urlparse
-        mimes = getattr(self, "clip_mimes", [])
-        if "text/uri-list" not in mimes or self.closed:
+        if self.closed:
             return []
-        try:
-            r, fds = self.bus.call_with_unix_fd_list_sync(
-                RD_BUS, self.rd_path, RD_SESSION, "SelectionRead", GLib.Variant("(s)", ("text/uri-list",)),
-                GLib.VariantType("(h)"), Gio.DBusCallFlags.NONE, 5000, None, None)
-            data = _read_all(fds.get(r.unpack()[0]), 4 << 20) or b""
-        except GLib.Error as e:
-            log.info("copied files: %s", e.message)
-            return []
-        paths = []
-        for line in data.decode("utf-8", "replace").splitlines():
-            line = line.strip()
-            if line and not line.startswith("#"):
-                u = urlparse(line)
-                if u.scheme == "file":
+        log.info("copied files: GNOME offers %s", getattr(self, "clip_mimes", "(no copy seen)"))
+        for mime in ("text/uri-list", "x-special/gnome-copied-files"):
+            try:
+                r, fds = self.bus.call_with_unix_fd_list_sync(
+                    RD_BUS, self.rd_path, RD_SESSION, "SelectionRead", GLib.Variant("(s)", (mime,)),
+                    GLib.VariantType("(h)"), Gio.DBusCallFlags.NONE, 5000, None, None)
+                data = _read_all(fds.get(r.unpack()[0]), 4 << 20) or b""
+            except GLib.Error as e:
+                log.info("copied files as %s: %s", mime, e.message)
+                continue
+            paths = []
+            for line in data.decode("utf-8", "replace").splitlines():
+                u = urlparse(line.strip())
+                if u.scheme == "file":       # gnome-copied-files starts with "copy" or "cut": skipped
                     paths.append(unquote(u.path))
-        return paths
+            log.info("copied files as %s: %d", mime, len(paths))
+            if paths:
+                return paths
+        return []
 
     def set_text(self, text):
         """Any thread. Offers `text` as the clipboard; GNOME asks for it when an app pastes."""
