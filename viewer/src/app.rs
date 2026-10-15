@@ -39,6 +39,10 @@ struct Live {
     windows: Vec<Value>,
     active: Value,
     mac_name: String,
+    /// The paired computers, for the switcher: (id, name, on the network now, this one).
+    machines: Vec<(String, String, bool, bool)>,
+    /// A tray-style command the switcher asked for ("connect:<id>").
+    switch_to: Option<String>,
     settings: Option<Value>,
     rtt: f64,
     sent_viewport: (f32, f32, u32, u32, u32),
@@ -211,6 +215,16 @@ impl App {
         }
     }
 
+    /// The paired computers: (id, name, on the network now, key).
+    fn machines(&self) -> Vec<(String, String, bool, Option<[u8; 32]>)> {
+        let found = self.browser.found.lock().unwrap().clone();
+        let online: Vec<String> = found.iter().filter_map(|f| self.saved_for(f)).map(|h| h.mac_id).collect();
+        let mut v: Vec<_> = self.hosts.iter()
+            .map(|h| (h.mac_id.clone(), h.name.clone(), online.contains(&h.mac_id), h.fp())).collect();
+        v.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()));
+        v
+    }
+
     fn saved_for(&self, f: &Found) -> Option<SavedHost> {
         self.hosts.iter()
             .find(|h| f.tag.as_deref().is_some_and(|t| h.matches_tag(t)))
@@ -233,7 +247,7 @@ impl App {
             let r = Session::start(&t.addr, &id, pin, ev_tx, v_tx, wake.clone()).map(|session| {
                 decode::spawn(v_rx, shared.clone(), wake.clone());
                 Box::new(Live {
-                    session, events: ev_rx, shared, windows: vec![], active: json!({"none": {}}), mac_name: t.name.clone(),
+                    session, events: ev_rx, shared, windows: vec![], active: json!({"none": {}}), mac_name: t.name.clone(), machines: vec![], switch_to: None,
                     settings: None, rtt: 0.0, sent_viewport: (0.0, 0.0, 0, 0, 0), match_screen: false, sent_mods: Modifiers::NONE,
                     buttons_down: vec![], scroll_open: None, last_pos: (0.5, 0.5), token: 0, fps: 60,
                     cursor_in_video: false, fullscreen: false, os_fullscreen: None,
@@ -408,6 +422,12 @@ impl eframe::App for App {
         for c in commands {
             self.tray_command(ctx, &c);
         }
+        let machines = self.machines();
+        if let Screen::Stream(live, _) = &mut self.screen {
+            let fp = live.session.host_fp;
+            live.machines = machines.into_iter()
+                .map(|(id, name, online, hfp)| (id, name, online, hfp == Some(fp))).collect();
+        }
         let screen = std::mem::replace(&mut self.screen, Screen::Home { status: String::new() });
         self.screen = match screen {
             Screen::Home { status } => {
@@ -468,6 +488,17 @@ impl eframe::App for App {
                 }
             },
         };
+        let switch = if let Screen::Stream(live, _) = &mut self.screen { live.switch_to.take() } else { None };
+        if let Some(cmd) = switch {
+            if let Screen::Stream(live, _) = &mut self.screen {
+                if live.match_screen {
+                    toggle_match(ctx, live);
+                } else if live.fullscreen {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+                }
+            }
+            self.tray_command(ctx, &cmd);
+        }
         if self.tray.is_some() {
             let st = self.tray_state(ctx);
             if let Some(t) = self.tray.as_mut() {
@@ -544,7 +575,17 @@ fn stream(ctx: &egui::Context, live: &mut Live, target: &Target) -> Option<Strin
     if !live.fullscreen {
         egui::TopBottomPanel::top("bar").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new(&live.mac_name).strong());
+                // The computer: a menu of the paired ones, to switch quickly.
+                egui::ComboBox::from_id_salt("machine")
+                    .selected_text(RichText::new(&live.mac_name).strong())
+                    .show_ui(ui, |ui| {
+                        for (id, name, online, this) in live.machines.clone() {
+                            let label = if this || online { RichText::new(&name) } else { RichText::new(format!("{name} (not found)")).weak() };
+                            if ui.selectable_label(this, label).clicked() && !this {
+                                live.switch_to = Some(format!("connect:{id}"));
+                            }
+                        }
+                    });
                 let cur = if live.active.get("desktop").is_some() { "Desktop".to_string() } else {
                     let id = live.active["window"]["_0"].as_u64();
                     live.windows.iter().find(|w| w["id"].as_u64() == id)
