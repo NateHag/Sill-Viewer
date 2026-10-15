@@ -24,6 +24,8 @@ In the stream window
 - Match this screen: full screen, on a virtual screen with exactly your monitor's resolution, so
   one remote pixel is one pixel on your screen (hosts with virtual screens: sill-linux).
   The host also uses your screen's scale (a Retina Mac: 200%), so text keeps its normal size.
+  On sill-linux the virtual screen replaces the computer's own monitors while you match: your
+  windows and icons move to it, and its monitors go dark until you leave Match or disconnect.
 - Full screen: click "Full screen" (Mac: the green window button). Ctrl+Alt+Shift+F leaves it.
 - Copy and paste work both ways (text, with sill-linux hosts). Text you copy on this computer
   goes to the host when you come back to the viewer window.

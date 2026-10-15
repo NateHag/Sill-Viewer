@@ -370,6 +370,9 @@ class Host:
                     cursor=self._cursor_in_video(sessions))
         wid = active.get("window", {}).get("_0") if "window" in active else None
         want_virtual = wid == VIRTUAL_ID or ("desktop" in active and s["virtualDisplay"])
+        # GNOME sends at most one frame per screen refresh: asking for more only fails.
+        if want_virtual:
+            base["fps"] = min(base["fps"], 60)
         if self.args.test_source:
             return Spec(kind="test", connector=None, virtual=False, width=1920, height=1080, **base)
         if want_virtual:
@@ -392,6 +395,8 @@ class Host:
             mon = next((m for m in self.monitors if m.primary), self.monitors[0] if self.monitors else None)
         if mon is None:
             return None
+        if mon.refresh and mon.refresh >= 24:
+            base["fps"] = min(base["fps"], max(24, int(round(mon.refresh))))
         return Spec(kind="mutter", connector=mon.connector, virtual=False, width=mon.width, height=mon.height, **base)
 
     def _apply(self, force=False):
@@ -530,8 +535,8 @@ class Host:
         return True
 
     def _scale_virtual(self):
-        """Once a virtual screen is up and streaming, give it the scale the device wants (a Retina
-        Mac: 2), so text has its normal size there. Once per stream."""
+        """Once a virtual screen is up and streaming, make it the only screen (the physical ones go
+        dark until it ends) with the scale the device wants (a Retina Mac: 2). Once per stream."""
         p, r = self.pipeline, self.running
         if self.bus is None or p is None or r is None or not getattr(r, "virtual", False) or getattr(p, "scaled", False):
             return
@@ -540,10 +545,13 @@ class Host:
         p.scaled = True
         want = getattr(r, "vscale", 1.0)
         try:
-            got = mutter.set_virtual_scale(self.bus, want)
-            log.info("virtual screen scale: %s (asked %s)", got, want)
+            got = mutter.take_over(self.bus, want)
             if got:
-                p.virtual_scale = float(got)
+                scale, logical = got
+                log.info("virtual screen is now the only screen, at scale %s (asked %s)", scale, want)
+                p.virtual_scale = float(scale) if logical else 1.0
+            else:
+                log.warning("no virtual monitor to set up")
         except GLib.Error as e:
             log.warning("could not set the virtual screen's scale: %s", e.message)
 

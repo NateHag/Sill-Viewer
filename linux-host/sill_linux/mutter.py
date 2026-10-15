@@ -78,36 +78,30 @@ def monitors(bus):
     return out
 
 
-def set_virtual_scale(bus, want):
-    """Sets the scale of the virtual monitor (connector "Meta-…") to the supported scale nearest
-    `want`, and makes it the primary monitor, so the top bar and the desktop icons are on the
-    screen the viewer sees. Other monitors keep their place and scale. Temporary: GNOME goes back
-    to its saved layout when the virtual monitor goes. Returns the scale set, or None."""
+def take_over(bus, want):
+    """Makes the virtual monitor (connector "Meta-…") the only screen: the physical monitors are
+    turned off while it streams, so every window, the desktop icons and the top bar move to the
+    screen the viewer sees. Its scale is the supported one nearest `want`. Temporary: GNOME goes
+    back to its saved layout when the virtual monitor goes away.
+    Returns (scale, logical): `logical` is True when GNOME lays monitors out in logical pixels
+    (then pointer positions on the stream are in logical pixels too). None if there is no virtual
+    monitor."""
     r = bus.call_sync(DC_BUS, DC_PATH, DC_BUS, "GetCurrentState", None, None, Gio.DBusCallFlags.NONE, 5000, None)
-    serial, mons, logical, _props = r.unpack()
-    modes = {}
+    serial, mons, _logical, props = r.unpack()
+    logical = int(props.get("layout-mode", 1)) == 1
     for (spec, mode_list, _mprops) in mons:
-        cur = next((m for m in mode_list if m[6].get("is-current")), None)
-        if cur is not None:
-            modes[spec[0]] = (cur[0], list(cur[5]) or [1.0])
-    configs, chosen = [], None
-    for (x, y, scale, transform, primary, specs, _lp) in logical:
-        connectors = [sp[0] for sp in specs if sp[0] in modes]
-        if not connectors:
+        if not spec[0].startswith("Meta-"):
             continue
-        primary = False
-        if any(c.startswith("Meta-") for c in connectors) and chosen is None:
-            supported = modes[connectors[0]][1]
-            scale = min(supported, key=lambda v: abs(v - want))
-            chosen = scale
-            primary = True
-        configs.append((x, y, scale, transform, primary, [(c, modes[c][0], {}) for c in connectors]))
-    if chosen is None:
-        return None
-    bus.call_sync(DC_BUS, DC_PATH, DC_BUS, "ApplyMonitorsConfig",
-                  GLib.Variant("(uua(iiduba(ssa{sv}))a{sv})", (serial, 1, configs, {})),
-                  None, Gio.DBusCallFlags.NONE, 5000, None)
-    return chosen
+        cur = next((m for m in mode_list if m[6].get("is-current")), None) or (mode_list[0] if mode_list else None)
+        if cur is None:
+            continue
+        scale = min(list(cur[5]) or [1.0], key=lambda v: abs(v - want))
+        configs = [(0, 0, scale, 0, True, [(spec[0], cur[0], {})])]
+        bus.call_sync(DC_BUS, DC_PATH, DC_BUS, "ApplyMonitorsConfig",
+                      GLib.Variant("(uua(iiduba(ssa{sv}))a{sv})", (serial, 1, configs, {})),
+                      None, Gio.DBusCallFlags.NONE, 5000, None)
+        return scale, logical
+    return None
 
 
 def watch_monitors(bus, callback):
