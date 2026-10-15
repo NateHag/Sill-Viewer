@@ -77,6 +77,35 @@ def monitors(bus):
     return out
 
 
+def set_virtual_scale(bus, want):
+    """Sets the scale of the virtual monitors (connectors "Meta-…") to the supported scale nearest
+    `want`, keeping every other monitor as it is. Temporary: GNOME forgets it when the virtual
+    monitor goes. Returns the scale set, or None."""
+    r = bus.call_sync(DC_BUS, DC_PATH, DC_BUS, "GetCurrentState", None, None, Gio.DBusCallFlags.NONE, 5000, None)
+    serial, mons, logical, _props = r.unpack()
+    modes = {}
+    for (spec, mode_list, _mprops) in mons:
+        cur = next((m for m in mode_list if m[6].get("is-current")), None)
+        if cur is not None:
+            modes[spec[0]] = (cur[0], list(cur[5]) or [1.0])
+    configs, chosen = [], None
+    for (x, y, scale, transform, primary, specs, _lp) in logical:
+        connectors = [sp[0] for sp in specs if sp[0] in modes]
+        if not connectors:
+            continue
+        if any(c.startswith("Meta-") for c in connectors):
+            supported = modes[connectors[0]][1]
+            scale = min(supported, key=lambda v: abs(v - want))
+            chosen = scale
+        configs.append((x, y, scale, transform, primary, [(c, modes[c][0], {}) for c in connectors]))
+    if chosen is None:
+        return None
+    bus.call_sync(DC_BUS, DC_PATH, DC_BUS, "ApplyMonitorsConfig",
+                  GLib.Variant("(uua(iiduba(ssa{sv}))a{sv})", (serial, 1, configs, {})),
+                  None, Gio.DBusCallFlags.NONE, 5000, None)
+    return chosen
+
+
 def watch_monitors(bus, callback):
     return bus.signal_subscribe(None, DC_BUS, "MonitorsChanged", DC_PATH, None, Gio.DBusSignalFlags.NONE,
                                 lambda *a: callback())

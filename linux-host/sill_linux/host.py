@@ -348,11 +348,14 @@ class Host:
             if isinstance(pw, (int, float)) and isinstance(ph, (int, float)) and 320 <= pw <= 8192 and 240 <= ph <= 8192:
                 # The viewer asked for its screen's exact pixels ("Match this screen"): one
                 # remote pixel per screen pixel, whatever Sharp says.
+                ps = vp.get("pixelScale")
+                vscale = float(ps) if isinstance(ps, (int, float)) and 0.5 <= ps <= 4 else 1.0
                 return Spec(kind="mutter", connector=None, virtual=True, width=_even(pw), height=_even(ph),
-                            **dict(base, scale_half=False))
+                            vscale=vscale, **dict(base, scale_half=False))
             k = 1 if half else 2
+            # Points times 2 is a Retina screen: GNOME shows it at 200%, so text keeps its size.
             return Spec(kind="mutter", connector=None, virtual=True, width=_even(vp["width"] * k),
-                        height=_even(vp["height"] * k), **dict(base, scale_half=False))
+                        height=_even(vp["height"] * k), vscale=float(k), **dict(base, scale_half=False))
         mon = next((m for m in self.monitors if window_id(m.connector) == wid), None)
         if mon is None:
             mon = next((m for m in self.monitors if m.primary), self.monitors[0] if self.monitors else None)
@@ -430,6 +433,7 @@ class Host:
         self.last_frames = (0, time.monotonic())
         self.broadcast_settings()
         self.broadcast_window_list()
+        GLib.timeout_add(700, lambda: (self._scale_virtual(), False)[1])
 
     def _stop_stream(self):
         if self.pipeline is not None:
@@ -461,6 +465,7 @@ class Host:
         self.schedule_apply(delay)
 
     def _watchdog(self):
+        self._scale_virtual()
         p = self.pipeline
         if p is not None and self.running is not None:
             n, t = self.last_frames
@@ -477,6 +482,22 @@ class Host:
         if idle is not None and self.running is not None and time.monotonic() - idle > 10:
             self.schedule_apply()
         return True
+
+    def _scale_virtual(self):
+        """Once a virtual screen is up and streaming, give it the scale the device wants (a Retina
+        Mac: 2), so text has its normal size there. Once per stream."""
+        p, r = self.pipeline, self.running
+        if self.bus is None or p is None or r is None or not getattr(r, "virtual", False) or getattr(p, "scaled", False):
+            return
+        if p.capture_size is None:
+            return
+        p.scaled = True
+        want = getattr(r, "vscale", 1.0)
+        try:
+            got = mutter.set_virtual_scale(self.bus, want)
+            log.info("virtual screen scale: %s (asked %s)", got, want)
+        except GLib.Error as e:
+            log.warning("could not set the virtual screen's scale: %s", e.message)
 
     def _on_au(self, params, payload, key):
         dump = os.environ.get("SILL_DUMP")
