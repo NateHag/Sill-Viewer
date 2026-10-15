@@ -78,9 +78,10 @@ def monitors(bus):
 
 
 def set_virtual_scale(bus, want):
-    """Sets the scale of the virtual monitors (connectors "Meta-…") to the supported scale nearest
-    `want`, keeping every other monitor as it is. Temporary: GNOME forgets it when the virtual
-    monitor goes. Returns the scale set, or None."""
+    """Sets the scale of the virtual monitor (connector "Meta-…") to the supported scale nearest
+    `want`, and makes it the primary monitor, so the top bar and the desktop icons are on the
+    screen the viewer sees. Other monitors keep their place and scale. Temporary: GNOME goes back
+    to its saved layout when the virtual monitor goes. Returns the scale set, or None."""
     r = bus.call_sync(DC_BUS, DC_PATH, DC_BUS, "GetCurrentState", None, None, Gio.DBusCallFlags.NONE, 5000, None)
     serial, mons, logical, _props = r.unpack()
     modes = {}
@@ -93,10 +94,12 @@ def set_virtual_scale(bus, want):
         connectors = [sp[0] for sp in specs if sp[0] in modes]
         if not connectors:
             continue
-        if any(c.startswith("Meta-") for c in connectors):
+        primary = False
+        if any(c.startswith("Meta-") for c in connectors) and chosen is None:
             supported = modes[connectors[0]][1]
             scale = min(supported, key=lambda v: abs(v - want))
             chosen = scale
+            primary = True
         configs.append((x, y, scale, transform, primary, [(c, modes[c][0], {}) for c in connectors]))
     if chosen is None:
         return None

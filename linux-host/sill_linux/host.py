@@ -496,6 +496,8 @@ class Host:
         try:
             got = mutter.set_virtual_scale(self.bus, want)
             log.info("virtual screen scale: %s (asked %s)", got, want)
+            if got:
+                p.virtual_scale = float(got)
         except GLib.Error as e:
             log.warning("could not set the virtual screen's scale: %s", e.message)
 
@@ -535,9 +537,19 @@ class Host:
             return (r.width, r.height)
         return None
 
+    def _virtual_scale(self):
+        """The scale set on the virtual screen (1 until it is set). GNOME takes pointer positions on
+        a virtual stream in logical pixels (stream pixels / scale), not in stream pixels."""
+        p, r = self.pipeline, self.running
+        if p is None or r is None or not getattr(r, "virtual", False):
+            return 1.0
+        return getattr(p, "virtual_scale", 1.0)
+
     def _logical_scale(self):
         r = self.running
-        if r is None or r.virtual or r.connector is None:
+        if r is None or r.connector is None:
+            return self._virtual_scale()
+        if r.virtual:
             return 1.0
         m = next((m for m in self.monitors if m.connector == r.connector), None)
         return m.scale if m else 1.0
@@ -561,8 +573,9 @@ class Host:
             # takes later moves as part of a finger scroll.
             self._close_scroll(st, cap)
             if size is not None:
-                x = min(max(float(p.get("x", 0)), 0.0), 1.0) * (size[0] - 1)
-                y = min(max(float(p.get("y", 0)), 0.0), 1.0) * (size[1] - 1)
+                k = self._virtual_scale()
+                x = min(max(float(p.get("x", 0)), 0.0), 1.0) * (size[0] - 1) / k
+                y = min(max(float(p.get("y", 0)), 0.0), 1.0) * (size[1] - 1) / k
                 cap.motion(x, y)
             button = {"leftDown": (mutter.BTN_LEFT, True), "leftUp": (mutter.BTN_LEFT, False),
                       "rightDown": (mutter.BTN_RIGHT, True), "rightUp": (mutter.BTN_RIGHT, False)}.get(action)
