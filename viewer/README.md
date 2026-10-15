@@ -36,7 +36,19 @@ Windows asks once to let it through the firewall: allow it on private networks.
 
 MAC
 In Terminal, in this folder:   ./build-mac.sh
-It installs Homebrew's ffmpeg and Rust if needed, then builds "target/Sill Viewer.app".
+It installs Homebrew's ffmpeg and Rust if needed, builds "Sill Viewer.app" and puts it in
+/Applications. Open it from Launchpad or Spotlight. The app carries its own FFmpeg.
+To build again after "git pull", run ./build-mac.sh again.
+
+Sign with your Apple Developer ID (so it runs on other Macs without warnings):
+  security find-identity -v -p codesigning          (copy the "Developer ID Application" name)
+  SIGN_ID="Developer ID Application: Your Name (TEAMID)" ./build-mac.sh
+
+NOTARIZE (one time setup, then the build does it):
+  xcrun notarytool store-credentials sill --apple-id YOU@EXAMPLE.COM --team-id TEAMID
+  (it asks for an app-specific password from appleid.apple.com)
+  SIGN_ID="Developer ID Application: Your Name (TEAMID)" NOTARY_PROFILE=sill ./build-mac.sh
+The zip to share is target/SillViewer-mac.zip.
 
 LINUX
 Needs FFmpeg 6 or later (Ubuntu 24.04: sudo apt install libavcodec60 libavutil58).

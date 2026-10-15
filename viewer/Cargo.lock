@@ -3119,6 +3119,7 @@ dependencies = [
  "env_logger",
  "ffmpeg-next",
  "hmac",
+ "if-addrs",
  "log",
  "mdns-sd",
  "pbkdf2",

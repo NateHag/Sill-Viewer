@@ -10,6 +10,7 @@ eframe = { version = "=0.29.1", default-features = false, features = ["wgpu", "d
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rcgen = { version = "0.13", default-features = false, features = ["ring", "pem"] }
 x509-parser = "0.16"
+if-addrs = "0.13"
 mdns-sd = "0.11"
 ffmpeg-next = "9.0"
 sha2 = "0.10"

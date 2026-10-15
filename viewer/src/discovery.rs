@@ -59,6 +59,11 @@ impl Browser {
                 match ev {
                     ServiceEvent::ServiceResolved(info) => {
                         let fullname = info.get_fullname().to_string();
+                        // A host on this same computer (a Mac running Sill): never offer it.
+                        if is_this_computer(info.get_addresses().iter()) {
+                            log::info!("not listing {fullname}: it is this computer");
+                            continue;
+                        }
                         let name = fullname.strip_suffix("._sill._tcp.local.").unwrap_or(&fullname).replace("\\032", " ");
                         let f = Found {
                             name,
@@ -84,5 +89,27 @@ impl Browser {
             }
         }).ok();
         Browser { found, _daemon: Some(daemon) }
+    }
+}
+
+/// True when one of the addresses belongs to this computer.
+fn is_this_computer<'a>(addrs: impl Iterator<Item = &'a std::net::IpAddr>) -> bool {
+    let local: Vec<std::net::IpAddr> = if_addrs::get_if_addrs().map(|v| v.iter().map(|i| i.ip()).collect()).unwrap_or_default();
+    for a in addrs {
+        if a.is_loopback() || local.contains(a) {
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn this_computer() {
+        let mine: Vec<std::net::IpAddr> = if_addrs::get_if_addrs().unwrap().iter().map(|i| i.ip()).collect();
+        assert!(super::is_this_computer(mine.iter()));
+        let other: std::net::IpAddr = "203.0.113.9".parse().unwrap();
+        assert!(!super::is_this_computer([other].iter()));
     }
 }

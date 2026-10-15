@@ -43,8 +43,7 @@ jobs:
       - name: Build
         working-directory: viewer
         run: |
-          ./build-mac.sh
-          cd target && ditto -c -k --keepParent "Sill Viewer.app" SillViewer-mac.zip
+          NO_INSTALL=1 ./build-mac.sh
       - uses: actions/upload-artifact@v4
         with:
           name: SillViewer-mac
