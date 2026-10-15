@@ -118,7 +118,7 @@ fn headless(a: &[String], id: identity::Identity) -> i32 {
     };
     println!("SESSION ok: {} ({})", s.peer_addr, identity::mac_id(&s.host_fp));
     decode::spawn(v_rx, shared.clone(), wake);
-    s.viewport(1280.0, 800.0, 60);
+    s.viewport(1280.0, 800.0, 60, opt("--pixels").and_then(|p| { let (w, h) = p.split_once('x')?; Some((w.parse().ok()?, h.parse().ok()?)) }));
     let start = Instant::now();
     let mut last = 0u64;
     let mut rtt = 0.0;

@@ -118,8 +118,15 @@ impl Session {
         self.send(wire::SELECT_SOURCE, &source);
     }
 
-    pub fn viewport(&self, width: f64, height: f64, fps: u32) {
-        self.send(wire::VIEWPORT, &json!({"width": width, "height": height, "fps": fps}));
+    /// The panel's size in points. `pixels`: the exact pixel size wanted for a virtual screen
+    /// ("Match this screen"); an extra key that Sill's own apps ignore.
+    pub fn viewport(&self, width: f64, height: f64, fps: u32, pixels: Option<(u32, u32)>) {
+        let mut v = json!({"width": width, "height": height, "fps": fps});
+        if let Some((pw, ph)) = pixels {
+            v["pixelWidth"] = json!(pw);
+            v["pixelHeight"] = json!(ph);
+        }
+        self.send(wire::VIEWPORT, &v);
     }
 
     pub fn input(&self, v: Value) {

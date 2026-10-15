@@ -21,6 +21,8 @@ Use "Quit Sill Viewer" in the tray menu to quit.
 In the stream window
 - The bar at the top: pick the screen, the quality, Sharp (full resolution), 120 fps,
   and "Fit screen" (a virtual screen sized to this window, on hosts that have one).
+- Match this screen: full screen, on a virtual screen with exactly your monitor's resolution, so
+  one remote pixel is one pixel on your screen (hosts with virtual screens: sill-linux).
 - Full screen: click "Full screen". Press Ctrl+Alt+Shift+F to leave it.
 - Mouse, scroll wheel and keyboard go to the computer while the pointer is over the picture.
   Your own cursor shows where clicks land (with sill-linux 7 or later the host leaves its

@@ -329,6 +329,8 @@ class Host:
             return None
         if not sessions and (idle_since is None or time.monotonic() - idle_since > 10):
             return None
+        if not sessions and self.running is not None:
+            return self.running      # the 10 s after the last device leaves: keep what runs, a quick return reuses it
         s = self.settings
         fps = max([x.fps for x in sessions] or [60])
         fps = max(24, min(s["maxFPS"], fps))
@@ -342,6 +344,12 @@ class Host:
         if want_virtual:
             vps = [x.viewport for x in sessions if x.viewport]
             vp = vps[-1] if vps else {"width": 1180, "height": 820}
+            pw, ph = vp.get("pixelWidth"), vp.get("pixelHeight")
+            if isinstance(pw, (int, float)) and isinstance(ph, (int, float)) and 320 <= pw <= 8192 and 240 <= ph <= 8192:
+                # The viewer asked for its screen's exact pixels ("Match this screen"): one
+                # remote pixel per screen pixel, whatever Sharp says.
+                return Spec(kind="mutter", connector=None, virtual=True, width=_even(pw), height=_even(ph),
+                            **dict(base, scale_half=False))
             k = 1 if half else 2
             return Spec(kind="mutter", connector=None, virtual=True, width=_even(vp["width"] * k),
                         height=_even(vp["height"] * k), **dict(base, scale_half=False))

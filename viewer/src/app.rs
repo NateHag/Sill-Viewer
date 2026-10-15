@@ -41,7 +41,8 @@ struct Live {
     mac_name: String,
     settings: Option<Value>,
     rtt: f64,
-    sent_viewport: (f32, f32, u32),
+    sent_viewport: (f32, f32, u32, u32, u32),
+    match_screen: bool,
     sent_mods: Modifiers,
     buttons_down: Vec<&'static str>,
     scroll_open: Option<Instant>,
@@ -119,6 +120,8 @@ impl App {
                 st.fit = live.settings.as_ref().filter(|v| v["virtualDisplayAvailable"] == true)
                     .map(|v| v["settings"]["virtualDisplay"] == true);
                 st.fullscreen = live.fullscreen;
+                st.match_screen = live.settings.as_ref().filter(|v| v["virtualDisplayAvailable"] == true)
+                    .map(|_| live.match_screen);
             }
             Screen::Connecting(t) => st.status = format!("Connecting to {}…", t.name),
             Screen::Pairing { target, .. } => st.status = format!("Pairing with {}", target.name),
@@ -168,7 +171,15 @@ impl App {
                 }
                 self.screen = Screen::Home { status: String::new() };
             }
+            "match" => {
+                toggle_match(ctx, live);
+                tray::show_window(ctx);
+            }
             "fullscreen" => {
+                if live.match_screen {
+                    toggle_match(ctx, live);
+                    return;
+                }
                 live.fullscreen = !live.fullscreen;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(live.fullscreen));
                 tray::show_window(ctx);
@@ -179,7 +190,7 @@ impl App {
                 if live.fps == 120 && max < 120 {
                     setting(live, "maxFPS", json!(120));
                 }
-                live.sent_viewport = (0.0, 0.0, 0);     // sends the new rate with the next frame
+                live.sent_viewport = (0.0, 0.0, 0, 0, 0);     // sends the new rate with the next frame
             }
             "sharp" => {
                 let sharp = live.settings.as_ref().and_then(|v| v["settings"]["captureScale"].as_f64()).unwrap_or(2.0) >= 1.5;
@@ -220,7 +231,7 @@ impl App {
                 decode::spawn(v_rx, shared.clone(), wake.clone());
                 Box::new(Live {
                     session, events: ev_rx, shared, windows: vec![], active: json!({"none": {}}), mac_name: t.name.clone(),
-                    settings: None, rtt: 0.0, sent_viewport: (0.0, 0.0, 0), sent_mods: Modifiers::NONE,
+                    settings: None, rtt: 0.0, sent_viewport: (0.0, 0.0, 0, 0, 0), match_screen: false, sent_mods: Modifiers::NONE,
                     buttons_down: vec![], scroll_open: None, last_pos: (0.5, 0.5), token: 0, fps: 60,
                     cursor_in_video: false, fullscreen: false,
                 })
@@ -463,6 +474,21 @@ impl eframe::App for App {
     }
 }
 
+/// "Match this screen": on, the host shows its desktop on a virtual screen with exactly this
+/// monitor's pixels, and this window goes full screen, so one remote pixel is one screen pixel.
+fn toggle_match(ctx: &egui::Context, live: &mut Live) {
+    live.match_screen = !live.match_screen;
+    let vd = live.settings.as_ref().map(|v| v["settings"]["virtualDisplay"] == true).unwrap_or(false);
+    if live.match_screen != vd {
+        setting(live, "virtualDisplay", json!(live.match_screen));
+    }
+    if live.fullscreen != live.match_screen {
+        live.fullscreen = live.match_screen;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(live.fullscreen));
+    }
+    live.sent_viewport = (0.0, 0.0, 0, 0, 0);
+}
+
 fn setting(live: &mut Live, field: &str, value: Value) {
     live.token += 1;
     let mut m = serde_json::Map::new();
@@ -542,6 +568,10 @@ fn stream(ctx: &egui::Context, live: &mut Live, target: &Target) -> Option<Strin
                         }
                     }
                     if st["virtualDisplayAvailable"] == true {
+                        if ui.selectable_label(live.match_screen, "Match this screen")
+                            .on_hover_text("Full screen, on a virtual screen with exactly this monitor's resolution").clicked() {
+                            toggle_match(ctx, live);
+                        }
                         let vd = s["virtualDisplay"] == true;
                         if ui.selectable_label(vd, "Fit screen").on_hover_text("Desktop on a virtual screen sized to this window").clicked() {
                             setting(live, "virtualDisplay", json!(!vd));
@@ -585,10 +615,18 @@ fn stream(ctx: &egui::Context, live: &mut Live, target: &Target) -> Option<Strin
                               egui::FontId::proportional(18.0), Color32::GRAY);
         }
         // The panel's size, in points, so a virtual screen on the host can match this window.
-        let vp = (avail.width().round(), avail.height().round(), live.fps);
+        // "Match this screen": the whole monitor, in its own pixels, for a virtual screen of
+        // exactly that size. Otherwise the panel's size in points.
+        let (monitor, ppp) = ctx.input(|i| (i.viewport().monitor_size, i.viewport().native_pixels_per_point));
+        let pixels = match (live.match_screen, monitor, ppp) {
+            (true, Some(m), Some(p)) => Some(((m.x * p).round() as u32, (m.y * p).round() as u32)),
+            _ => None,
+        };
+        let size = if live.match_screen { monitor.unwrap_or(avail.size()) } else { avail.size() };
+        let vp = (size.x.round(), size.y.round(), live.fps, pixels.map_or(0, |p| p.0), pixels.map_or(0, |p| p.1));
         if vp != live.sent_viewport && avail.width() > 50.0 {
             live.sent_viewport = vp;
-            live.session.viewport(vp.0 as f64, vp.1 as f64, vp.2);
+            live.session.viewport(vp.0 as f64, vp.1 as f64, vp.2, pixels);
         }
         handle_input(ctx, live, rect, resp.hovered() || resp.dragged(), &mut leave);
     });
@@ -654,8 +692,12 @@ fn handle_input(ctx: &egui::Context, live: &mut Live, rect: Rect, over: bool, le
             }
             egui::Event::Key { key, physical_key, pressed, repeat, modifiers } => {
                 if pressed && key == egui::Key::F && modifiers.ctrl && modifiers.alt && modifiers.shift {
-                    live.fullscreen = !live.fullscreen;
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(live.fullscreen));
+                    if live.match_screen {
+                        toggle_match(ctx, live);
+                    } else {
+                        live.fullscreen = !live.fullscreen;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(live.fullscreen));
+                    }
                     continue;
                 }
                 if repeat {

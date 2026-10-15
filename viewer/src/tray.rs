@@ -19,6 +19,8 @@ pub struct State {
     pub fps120: bool,
     pub fit: Option<bool>,
     pub fullscreen: bool,
+    /// None: the host has no virtual screens.
+    pub match_screen: Option<bool>,
     /// (id, name) of the computers to connect to.
     pub hosts: Vec<(String, String)>,
 }
@@ -35,6 +37,7 @@ pub struct Tray {
     fps120: CheckMenuItem,
     fit: CheckMenuItem,
     fullscreen: CheckMenuItem,
+    match_screen: CheckMenuItem,
     rx: Receiver<String>,
     shown: Option<State>,
 }
@@ -90,11 +93,12 @@ impl Tray {
         let fps120 = CheckMenuItem::with_id("fps120", "120 fps", false, false, None);
         let fit = CheckMenuItem::with_id("fit", "Fit screen to this window", false, false, None);
         let fullscreen = CheckMenuItem::with_id("fullscreen", "Full screen", false, false, None);
+        let match_screen = CheckMenuItem::with_id("match", "Match this screen's resolution", false, false, None);
         let quit = MenuItem::with_id("quit", "Quit Sill Viewer", true, None);
         let menu = Menu::new();
         let sep = || PredefinedMenuItem::separator();
         menu.append_items(&[&status, &sep(), &show, &connect, &disconnect, &sep(), &quality, &sharp, &fps120,
-                            &fit, &fullscreen, &sep(), &quit]).map_err(|e| e.to_string())?;
+                            &fit, &match_screen, &fullscreen, &sep(), &quit]).map_err(|e| e.to_string())?;
         let icon = TrayIconBuilder::new()
             .with_menu(Box::new(menu))
             .with_icon(icon())
@@ -127,11 +131,11 @@ impl Tray {
             }
         }));
         Ok(Tray { _icon: icon, status, disconnect, connect, connect_items: Vec::new(), quality, presets, sharp, fps120,
-                  fit, fullscreen, rx, shown: None })
+                  fit, fullscreen, match_screen, rx, shown: None })
     }
 
     /// The menu's commands since the last call: "disconnect", "connect:<id>", "bitrate:<n>", "sharp",
-    /// "fps120", "fit", "fullscreen", "quit" ("show" is handled already).
+    /// "fps120", "fit", "match", "fullscreen", "quit" ("show" is handled already).
     pub fn commands(&self) -> Vec<String> {
         self.rx.try_iter().collect()
     }
@@ -154,6 +158,8 @@ impl Tray {
         self.fit.set_checked(st.fit.unwrap_or(false));
         self.fullscreen.set_enabled(st.connected);
         self.fullscreen.set_checked(st.fullscreen);
+        self.match_screen.set_enabled(st.connected && st.match_screen.is_some());
+        self.match_screen.set_checked(st.match_screen.unwrap_or(false));
         if self.shown.as_ref().map(|s| &s.hosts) != Some(&st.hosts) {
             for it in self.connect_items.drain(..) {
                 let _ = self.connect.remove(&it);
