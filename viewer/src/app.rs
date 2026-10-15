@@ -416,7 +416,13 @@ impl eframe::App for App {
         // With a tray icon, closing the window hides it; Quit is in the tray's menu.
         if self.tray.is_some() && !self.quitting && ctx.input(|i| i.viewport().close_requested()) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            if cfg!(target_os = "macos") {
+                // On a Mac, minimize: a click on the Dock icon brings a minimized window back,
+                // but not a hidden one.
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+            } else {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            }
         }
         let commands = self.tray.as_ref().map(|t| t.commands()).unwrap_or_default();
         for c in commands {

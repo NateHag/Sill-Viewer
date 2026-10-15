@@ -34,3 +34,7 @@ codegen-units = 4
 
 [profile.dev]
 opt-level = 1
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "0.2.2", features = ["NSApplication", "NSWindow", "NSResponder"] }
+objc2-foundation = { version = "0.2.2", features = ["NSArray", "NSEnumerator", "NSThread"] }

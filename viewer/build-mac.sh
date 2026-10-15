@@ -49,6 +49,7 @@ cat > "$APP/Contents/Info.plist" <<EOF
   <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
   <key>LSMinimumSystemVersion</key><string>12.0</string>
   <key>NSHighResolutionCapable</key><true/>
+  <key>NSAppSleepDisabled</key><true/>
   <key>NSLocalNetworkUsageDescription</key><string>Sill Viewer finds and connects to computers on your network.</string>
   <key>NSBonjourServices</key><array><string>_sill._tcp</string></array>
 </dict></plist>

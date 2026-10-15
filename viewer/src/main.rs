@@ -10,6 +10,8 @@ mod decode;
 mod discovery;
 mod identity;
 mod input;
+#[cfg(target_os = "macos")]
+mod macos;
 mod pairing;
 mod render;
 mod session;

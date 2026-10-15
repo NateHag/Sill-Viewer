@@ -3123,6 +3123,8 @@ dependencies = [
  "if-addrs",
  "log",
  "mdns-sd",
+ "objc2-app-kit 0.2.2",
+ "objc2-foundation 0.2.2",
  "pbkdf2",
  "rand",
  "rcgen",
