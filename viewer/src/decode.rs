@@ -215,6 +215,10 @@ pub fn spawn(rx: Receiver<VideoPacket>, shared: Arc<Mutex<Shared>>, wake: Arc<dy
             while dec.dec.receive_frame(&mut frame).is_ok() {
                 errors = 0;
                 let src = if frame.format() == ff::format::Pixel::None || is_hw(&frame) {
+                    // A fresh frame each time: given one that already holds buffers, FFmpeg copies
+                    // into them at their old size, so a smaller picture lands in the top-left
+                    // corner of the last bigger one and the rest of that one stays on screen.
+                    sw = ff::frame::Video::empty();
                     unsafe {
                         if ffi::av_hwframe_transfer_data(sw.as_mut_ptr(), frame.as_ptr(), 0) < 0 {
                             continue;
