@@ -54,6 +54,12 @@ Ready-made files in the [downloads](downloads) folder:
 Every push also builds the viewer for Windows, Mac and Linux (Actions tab, the run's artifacts).
 A tag such as `v0.2.0` makes a release with the downloads attached.
 
+## Mac host (in progress)
+
+`mac-host/` is an unofficial build of Sill's own Mac host, renamed Sill Desktop Host, where the
+features above will come to Macs too (scaling, files, Match this screen, a locked Mac). Build it on
+the Mac with `cd mac-host && Scripts/make-app.sh --install --open`. See mac-host/README.md.
+
 ## Linux host: install
 
 ```

@@ -1,0 +1,17 @@
+Sill Desktop Host
+An unofficial build of Sill's Mac host.
+
+Based on Sill (https://github.com/Saffsanity/sill), Copyright its authors,
+licensed under the Apache License, Version 2.0 (see LICENSE).
+Upstream commit: see UPSTREAM_COMMIT.
+
+Changes in this copy (Apache 2.0, section 4b):
+- App name, bundle ID and executable name: Sill Desktop Host, io.github.natehag.sill-desktop-host,
+  SillDesktopHost, so it is never mistaken for Sill and never replaces it.
+- Its own keychain entries for the host identity (service and key tag renamed).
+- Automatic update checks off (Sill's releases are not this app's).
+- Scripts/make-app.sh: the new file names; quits Sill.app before installing.
+- Package.swift: the two probe targets left out.
+Later additions are listed in README.md.
+
+This project is not made by, or affiliated with, the Sill team.

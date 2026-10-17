@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Development builds only (Scripts/make-app.sh without release): lets lldb and Xcode's
+	     Attach to Process attach to the hardened app. Nothing else is needed: no sandbox, and the
+	     private CGVirtualDisplay API is looked up at runtime, so it needs no entitlement. -->
+	<key>com.apple.security.get-task-allow</key>
+	<true/>
+</dict>
+</plist>

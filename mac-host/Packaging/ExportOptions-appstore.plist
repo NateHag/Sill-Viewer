@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- How Scripts/release-ios.sh exports the iOS app's archive for App Store Connect (TestFlight
+	     and the App Store): `xcodebuild -exportArchive -exportOptionsPlist` reads this file.
+	     `xcodebuild -help` lists every key. -->
+	<key>method</key>
+	<string>app-store-connect</string>
+	<!-- export writes Sill.ipa on this Mac. release-ios.sh --upload uses a copy that says upload,
+	     so nothing here ever sends a build to Apple by itself. -->
+	<key>destination</key>
+	<string>export</string>
+	<key>teamID</key>
+	<string>9B2KKVM937</string>
+	<!-- Xcode picks the Apple Distribution certificate and makes or renews the App Store profile
+	     for me.saffer.sill (release-ios.sh passes -allowProvisioningUpdates). -->
+	<key>signingStyle</key>
+	<string>automatic</string>
+	<!-- The build number App Store Connect gets is the project's CURRENT_PROJECT_VERSION, never one
+	     Xcode picks: each uploaded build then names the commit it was made from, and an upload
+	     whose number was used before is refused (release-ios.sh --bump makes the next one). With
+	     YES, an export would also ask App Store Connect for the app's builds. -->
+	<key>manageAppVersionAndBuildNumber</key>
+	<false/>
+	<!-- Crash reports from TestFlight and the App Store come back symbolicated. -->
+	<key>uploadSymbols</key>
+	<true/>
+	<!-- NO: a build can go to external testers and to App Review, not only to internal ones. -->
+	<key>testFlightInternalTestingOnly</key>
+	<false/>
+</dict>
+</plist>
