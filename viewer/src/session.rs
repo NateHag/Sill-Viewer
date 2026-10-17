@@ -35,6 +35,9 @@ pub struct Session {
     pub focused: Arc<AtomicBool>,
     /// The clipboard text both sides have, so neither sends it back.
     clip_last: Arc<Mutex<Option<String>>>,
+    /// The host speaks Sill's clipboard (kind 32): a Mac with Sill, or a new sill-linux.
+    sill_clip: Arc<AtomicBool>,
+    listed: Arc<AtomicBool>,
     events: Sender<Event>,
     wake: Arc<dyn Fn() + Send + Sync>,
     file_id: Arc<AtomicU32>,
@@ -56,11 +59,17 @@ impl Session {
         let start = Instant::now();
         let focused = Arc::new(AtomicBool::new(true));
         let clip_last = Arc::new(Mutex::new(None::<String>));
+        let sill_clip = Arc::new(AtomicBool::new(false));
+        // Set once the host's first window list came: until then it is unknown which clipboard
+        // message it speaks, so nothing is sent.
+        let listed = Arc::new(AtomicBool::new(false));
         let (clip_tx, clip_rx) = channel::<String>();
         let events_out = events.clone();
 
         {
             let (conn, alive, frames, wake) = (conn.clone(), alive.clone(), frames.clone(), wake.clone());
+            let sill_clip_r = sill_clip.clone();
+            let listed_r = listed.clone();
             let mut incoming = crate::files::Incoming::default();
             std::thread::Builder::new().name("session read".into()).spawn(move || {
                 let mut params: Option<(usize, Vec<Vec<u8>>)> = None;
@@ -84,6 +93,14 @@ impl Session {
                         }
                         wire::WINDOW_LIST | wire::HOST_SETTINGS | wire::GOODBYE => {
                             if let Ok(v) = serde_json::from_slice::<Value>(&m.payload) {
+                                // A host with Sill's clipboard: subscribe once, with an empty one.
+                                if m.kind == wire::WINDOW_LIST && v["clipboard"].as_i64().unwrap_or(0) >= 1
+                                    && !sill_clip_r.swap(true, Ordering::SeqCst) {
+                                    let _ = conn.send(&wire::json(wire::SILL_CLIPBOARD, &json!({})));
+                                }
+                                if m.kind == wire::WINDOW_LIST {
+                                    listed_r.store(true, Ordering::SeqCst);
+                                }
                                 let ev = match m.kind {
                                     wire::WINDOW_LIST => Event::WindowList(v),
                                     wire::HOST_SETTINGS => Event::HostSettings(v),
@@ -113,7 +130,7 @@ impl Session {
                                 }
                             }
                         }
-                        wire::CLIPBOARD => {
+                        wire::CLIPBOARD | wire::SILL_CLIPBOARD => {
                             if let Ok(v) = serde_json::from_slice::<Value>(&m.payload) {
                                 if let Some(t) = v["text"].as_str() {
                                     let _ = clip_tx.send(t.to_string());
@@ -144,6 +161,8 @@ impl Session {
             // The clipboard: text from the host goes on this computer's clipboard; text copied
             // here goes to the host (checked twice a second, while this window has the focus).
             let (conn, alive, focused, last) = (conn.clone(), alive.clone(), focused.clone(), clip_last.clone());
+            let sill = sill_clip.clone();
+            let listed_c = listed.clone();
             std::thread::Builder::new().name("clipboard".into()).spawn(move || {
                 let mut cb = match arboard::Clipboard::new() {
                     Ok(c) => c,
@@ -161,9 +180,9 @@ impl Session {
                             }
                         }
                         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                            if focused.load(Ordering::Relaxed) {
+                            if focused.load(Ordering::Relaxed) && listed_c.load(Ordering::SeqCst) {
                                 if let Ok(t) = cb.get_text() {
-                                    offer(&conn, &last, &t);
+                                    offer(&conn, &last, &sill, &t);
                                 }
                             }
                         }
@@ -174,7 +193,7 @@ impl Session {
         }
         let host_fp = conn.peer_fp;
         let peer_addr = conn.peer_addr.clone();
-        Ok(Session { conn, alive, focused, clip_last, events: events_out, wake, file_id: Arc::new(AtomicU32::new(1)),
+        Ok(Session { conn, alive, focused, clip_last, sill_clip, listed, events: events_out, wake, file_id: Arc::new(AtomicU32::new(1)),
                      sending: Arc::new(AtomicBool::new(false)), frames, host_fp, peer_addr })
     }
 
@@ -203,8 +222,8 @@ impl Session {
     /// Sends `text` as the clipboard now, if the host does not have it yet. Called on a paste, so
     /// the host has the newest text before the paste keys arrive.
     pub fn offer_clipboard(&self, text: &str) {
-        if self.alive.load(Ordering::Relaxed) {
-            offer(&self.conn, &self.clip_last, text);
+        if self.alive.load(Ordering::Relaxed) && self.listed.load(Ordering::SeqCst) {
+            offer(&self.conn, &self.clip_last, &self.sill_clip, text);
         }
     }
 
@@ -247,8 +266,10 @@ impl Drop for Session {
     }
 }
 
-fn offer(conn: &TlsConn, last: &Mutex<Option<String>>, text: &str) {
-    if text.is_empty() || text.len() > wire::MAX_CLIPBOARD_TEXT {
+fn offer(conn: &TlsConn, last: &Mutex<Option<String>>, sill: &AtomicBool, text: &str) {
+    let sill = sill.load(Ordering::SeqCst);
+    let max = if sill { wire::SILL_CLIPBOARD_TEXT } else { wire::MAX_CLIPBOARD_TEXT };
+    if text.is_empty() || text.len() > max {
         return;
     }
     let mut l = last.lock().unwrap();
@@ -256,5 +277,6 @@ fn offer(conn: &TlsConn, last: &Mutex<Option<String>>, text: &str) {
         return;
     }
     *l = Some(text.to_string());
-    let _ = conn.send(&wire::json(wire::CLIPBOARD, &json!({"text": text})));
+    let kind = if sill { wire::SILL_CLIPBOARD } else { wire::CLIPBOARD };
+    let _ = conn.send(&wire::json(kind, &json!({"text": text})));
 }

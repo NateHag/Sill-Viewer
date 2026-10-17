@@ -22,6 +22,10 @@ pub const HELLO: u8 = 23;
 /// Not Sill's: sill-linux and Sill Viewer only. JSON {"text": "..."} both ways: the clipboard
 /// changed on this side. Sill's own apps skip kinds they do not know.
 pub const CLIPBOARD: u8 = 200;
+/// Sill's own clipboard (Mac hosts, and sill-linux): JSON {"text"}, or {} to subscribe, or
+/// {"stop": true}. Only to a host whose window list says "clipboard" 1 or more. Text at most 256 KB.
+pub const SILL_CLIPBOARD: u8 = 32;
+pub const SILL_CLIPBOARD_TEXT: usize = 256 * 1024;
 pub const MAX_CLIPBOARD_TEXT: usize = 900_000;
 /// Not Sill's either: files both ways (see sill-linux's wire.py for the shapes).
 pub const FILE_START: u8 = 201;

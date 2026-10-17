@@ -171,7 +171,8 @@ class Host:
                             "bundleID": "linux.virtual", "width": 0, "height": 0})
         return {"macName": self.name, "windows": windows, "active": self.active, "launchID": self.launch_id,
                 "hostVersion": "0.1.0", "protocol": wire.PROTOCOL,
-                "cursorInVideo": bool(self.running.cursor) if self.running is not None else False}
+                "cursorInVideo": bool(self.running.cursor) if self.running is not None else False,
+                "clipboard": 1}
 
     def settings_state(self, answering=None):
         s = self.settings
@@ -279,6 +280,18 @@ class Host:
             self.pairing.open_window()
         elif kind == wire.CLIPBOARD:
             self._clipboard_from_device(s, json.loads(payload))
+        elif kind == wire.SILL_CLIPBOARD:
+            msg = json.loads(payload or b"{}")
+            if not isinstance(msg, dict):
+                return
+            if msg.get("stop"):
+                s.clip_sub = False
+                return
+            # Subscribing sends nothing back: what was copied before would overwrite what the
+            # person just copied on the device. Only new copies go out.
+            s.clip_sub = True
+            if "text" in msg:
+                self._clipboard_from_device(s, msg)
         elif kind == wire.FILE_DATA:
             self._incoming(s).data(s, payload)
         elif kind == wire.FILE_START:
@@ -323,21 +336,28 @@ class Host:
         if cap is not None:
             cap.set_text(text)
         # Other viewers get it too, so every screen pastes the same thing.
-        msg = wire.jmsg(wire.CLIPBOARD, {"text": text})
         with self.lock:
             others = [x for x in self.sessions if x is not s]
         for x in others:
-            x.send(msg)
+            self._send_clipboard(x, text)
+
+    def _send_clipboard(self, x, text):
+        """Sill's kind 32 to a session that subscribed (an iPhone, a Mac app, a new viewer);
+        kind 200 to an older Sill Viewer."""
+        if getattr(x, "clip_sub", False):
+            if len(text.encode("utf-8")) <= wire.SILL_CLIPBOARD_TEXT:
+                x.send(wire.jmsg(wire.SILL_CLIPBOARD, {"text": text}))
+        else:
+            x.send(wire.jmsg(wire.CLIPBOARD, {"text": text}))
 
     def _clipboard_from_here(self, text):
         if text == getattr(self, "clip_last", None):
             return      # our own text coming back, or no change
         self.clip_last = text
-        msg = wire.jmsg(wire.CLIPBOARD, {"text": text})
         with self.lock:
             sessions = list(self.sessions)
         for x in sessions:
-            x.send(msg)
+            self._send_clipboard(x, text)
 
     def _select(self, src):
         if not isinstance(src, dict) or len(src) != 1:

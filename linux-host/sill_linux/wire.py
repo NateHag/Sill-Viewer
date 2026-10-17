@@ -44,6 +44,10 @@ GESTURE = 28
 # Not Sill's: sill-linux and Sill Viewer only. JSON {"text": "..."} both ways: the clipboard
 # changed on this side. Sill's own apps skip kinds they do not know.
 CLIPBOARD = 200
+# Sill's own clipboard (its Mac app and iPhone app): JSON {"text"}; from a device, {} subscribes
+# and {"stop": true} ends it. Offered when the window list says "clipboard": 1.
+SILL_CLIPBOARD = 32
+SILL_CLIPBOARD_TEXT = 256 * 1024
 MAX_CLIPBOARD_TEXT = 900_000
 # Not Sill's either: files both ways. FILE_START JSON {"id", "name" (relative path, "/"), "size"};
 # FILE_DATA: 4-byte big-endian id, then bytes; FILE_END JSON {"id"}; FILE_CANCEL JSON {"id"};
