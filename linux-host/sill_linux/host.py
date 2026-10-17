@@ -172,7 +172,7 @@ class Host:
         return {"macName": self.name, "windows": windows, "active": self.active, "launchID": self.launch_id,
                 "hostVersion": "0.1.0", "protocol": wire.PROTOCOL,
                 "cursorInVideo": bool(self.running.cursor) if self.running is not None else False,
-                "clipboard": 1}
+                "clipboard": 1, "files": 1}
 
     def settings_state(self, answering=None):
         s = self.settings

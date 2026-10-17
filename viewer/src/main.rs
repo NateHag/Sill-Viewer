@@ -48,15 +48,36 @@ fn main() {
     if let Some(i) = args.iter().position(|a| a == "--headless") {
         std::process::exit(headless(&args[i + 1..], id));
     }
-    let options = eframe::NativeOptions {
-        viewport: eframe::egui::ViewportBuilder::default().with_title("Sill Viewer (unofficial)").with_inner_size([1280.0, 800.0]),
-        renderer: eframe::Renderer::Wgpu,
-        vsync: false,
-        ..Default::default()
-    };
-    if let Err(e) = eframe::run_native("Sill Viewer", options, Box::new(|cc| Ok(Box::new(app::App::new(cc, id))))) {
-        eprintln!("{e}");
-        std::process::exit(1);
+    // Windows: DirectX 12 first (smooth window moves with its flip model; Vulkan stutters there),
+    // in step with the screen, at most one frame queued. If DirectX 12 does not start, Vulkan or GL.
+    // WGPU_BACKEND (vulkan, dx12, gl) picks one by hand.
+    let chosen = std::env::var("WGPU_BACKEND").ok().map(|_| eframe::wgpu::util::backend_bits_from_env().unwrap_or(eframe::wgpu::Backends::PRIMARY));
+    let mut tries = vec![chosen.unwrap_or(if cfg!(windows) { eframe::wgpu::Backends::DX12 } else { eframe::wgpu::Backends::PRIMARY | eframe::wgpu::Backends::GL })];
+    if cfg!(windows) && chosen.is_none() {
+        tries.push(eframe::wgpu::Backends::VULKAN | eframe::wgpu::Backends::GL);
+    }
+    let id = std::cell::RefCell::new(Some(id));
+    for (n, backends) in tries.iter().enumerate() {
+        let mut options = eframe::NativeOptions {
+            viewport: eframe::egui::ViewportBuilder::default().with_title("Sill Viewer (unofficial)").with_inner_size([1280.0, 800.0]),
+            renderer: eframe::Renderer::Wgpu,
+            vsync: cfg!(windows),
+            ..Default::default()
+        };
+        options.wgpu_options.supported_backends = *backends;
+        options.wgpu_options.desired_maximum_frame_latency = Some(1);
+        log::info!("graphics: trying {backends:?}");
+        let r = eframe::run_native("Sill Viewer", options, Box::new(|cc| {
+            Ok(Box::new(app::App::new(cc, id.borrow_mut().take().expect("identity"))))
+        }));
+        match r {
+            Ok(()) => return,
+            Err(e) if n + 1 < tries.len() && id.borrow().is_some() => log::warn!("graphics {backends:?} failed: {e}; trying the next"),
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }
+        }
     }
 }
 

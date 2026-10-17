@@ -60,6 +60,8 @@ struct Live {
     note: Option<(String, Instant)>,
     /// Where a zoomed picture is panned to, as fractions (follows the pointer).
     pan: (f32, f32),
+    /// The host takes and sends files (sill-linux says so in its window list; Sill on a Mac does not).
+    files_ok: bool,
     settings: Option<Value>,
     rtt: f64,
     sent_viewport: (f32, f32, u32, u32, u32),
@@ -268,7 +270,7 @@ impl App {
             let r = Session::start(&t.addr, &id, pin, ev_tx, v_tx, wake.clone()).map(|session| {
                 decode::spawn(v_rx, shared.clone(), wake.clone());
                 Box::new(Live {
-                    session, events: ev_rx, shared, windows: vec![], active: json!({"none": {}}), mac_name: t.name.clone(), machines: vec![], switch_to: None, note: None, pan: (0.5, 0.5),
+                    session, events: ev_rx, shared, windows: vec![], active: json!({"none": {}}), mac_name: t.name.clone(), machines: vec![], switch_to: None, note: None, pan: (0.5, 0.5), files_ok: false,
                     settings: None, rtt: 0.0, sent_viewport: (0.0, 0.0, 0, 0, 0), match_screen: false, sent_mods: Modifiers::NONE,
                     buttons_down: vec![], scroll_open: None, last_pos: (0.5, 0.5), token: 0, fps: 60,
                     cursor_in_video: false, fullscreen: false, os_fullscreen: None,
@@ -564,6 +566,7 @@ fn stream(ctx: &egui::Context, live: &mut Live, target: &Target) -> Option<Strin
         match ev {
             Event::WindowList(v) => {
                 live.windows = v["windows"].as_array().cloned().unwrap_or_default();
+                live.files_ok = v["files"].as_i64().unwrap_or(0) >= 1;
                 // The host draws its cursor into the video only when it says so; otherwise this
                 // window's own cursor is the one to see, and it is exactly where the input goes.
                 live.cursor_in_video = v["cursorInVideo"] == true;
@@ -589,9 +592,16 @@ fn stream(ctx: &egui::Context, live: &mut Live, target: &Target) -> Option<Strin
     let (dropped, hovering) = ctx.input(|i| (i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect::<Vec<_>>(),
                                              !i.raw.hovered_files.is_empty()));
     if !dropped.is_empty() {
-        live.session.send_files(dropped);
+        if live.files_ok {
+            live.session.send_files(dropped);
+        } else {
+            live.note = Some((format!("{} can't receive files. File transfer works with Linux computers \
+                                      that run sill-linux.", live.mac_name), Instant::now()));
+        }
     }
-    let note = if hovering {
+    let note = if hovering && !live.files_ok {
+        Some(format!("{} can't receive files", live.mac_name))
+    } else if hovering {
         Some(format!("Drop to send to {}'s Downloads folder", live.mac_name))
     } else {
         live.note.as_ref().filter(|(_, at)| at.elapsed() < Duration::from_secs(6)).map(|(t, _)| t.clone())
@@ -699,7 +709,7 @@ fn stream(ctx: &egui::Context, live: &mut Live, target: &Target) -> Option<Strin
                     if ui.button("Disconnect").clicked() {
                         leave = Some(String::new());
                     }
-                    if ui.button("Get copied files")
+                    if live.files_ok && ui.button("Get copied files")
                         .on_hover_text(format!("Copy files on {} (Ctrl+C in Files), then click here: they come to your \
                                                 Downloads folder. To send files there, drop them on this window.", live.mac_name))
                         .clicked() {
