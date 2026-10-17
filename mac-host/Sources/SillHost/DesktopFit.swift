@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+import StreamProtocol
 
 /// Sill Desktop Host addition: "Fit screen" and "Match this screen" for the whole desktop.
 ///
