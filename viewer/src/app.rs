@@ -103,6 +103,8 @@ pub struct App {
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, id: Identity) -> App {
         let _ = crate::single::CTX.set(cc.egui_ctx.clone());
+        #[cfg(windows)]
+        crate::win::remember(cc);
         if let Some(rs) = cc.wgpu_render_state.as_ref() {
             render::init(rs);
         }

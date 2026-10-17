@@ -42,3 +42,5 @@ objc2-foundation = { version = "0.2.2", features = ["NSArray", "NSEnumerator", "
 # egui-wgpu builds wgpu without DirectX 12; turn it on for Windows (the viewer prefers it there).
 [target.'cfg(windows)'.dependencies]
 wgpu = { version = "22.1", default-features = false, features = ["dx12", "wgsl"] }
+raw-window-handle = "0.6"
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }

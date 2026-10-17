@@ -19,6 +19,8 @@ mod session;
 mod single;
 mod tls;
 mod tray;
+#[cfg(windows)]
+mod win;
 mod wire;
 
 use std::sync::mpsc::channel;

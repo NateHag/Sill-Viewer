@@ -72,6 +72,8 @@ fn icon() -> Icon {
 pub fn show_window(ctx: &egui::Context) {
     #[cfg(target_os = "macos")]
     crate::macos::show_window();
+    #[cfg(windows)]
+    crate::win::show_window();
     ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
     ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
     ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
