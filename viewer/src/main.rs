@@ -16,6 +16,7 @@ mod macos;
 mod pairing;
 mod render;
 mod session;
+mod single;
 mod tls;
 mod tray;
 mod wire;
@@ -51,6 +52,10 @@ fn main() {
     // Windows: DirectX 12 first (smooth window moves with its flip model; Vulkan stutters there),
     // in step with the screen, at most one frame queued. If DirectX 12 does not start, Vulkan or GL.
     // WGPU_BACKEND (vulkan, dx12, gl) picks one by hand.
+    match single::start() {
+        single::Start::Exit => return,
+        single::Start::Run(l) => single::listen(l),
+    }
     let chosen = std::env::var("WGPU_BACKEND").ok().map(|_| eframe::wgpu::util::backend_bits_from_env().unwrap_or(eframe::wgpu::Backends::PRIMARY));
     let mut tries = vec![chosen.unwrap_or(if cfg!(windows) { eframe::wgpu::Backends::DX12 } else { eframe::wgpu::Backends::PRIMARY | eframe::wgpu::Backends::GL })];
     if cfg!(windows) && chosen.is_none() {
