@@ -96,6 +96,8 @@ pub struct App {
     manual: String,
     tray: Option<Tray>,
     quitting: bool,
+    /// The paired computer whose Forget was clicked once (the second click confirms).
+    forget_confirm: Option<String>,
 }
 
 impl App {
@@ -127,6 +129,7 @@ impl App {
             manual: String::new(),
             tray,
             quitting: false,
+            forget_confirm: None,
         }
     }
 
@@ -236,6 +239,24 @@ impl App {
                     setting(live, "bitrate", json!(b));
                 }
             }
+        }
+    }
+
+    /// "Forget" for a paired computer: a second click confirms, then its key and address go.
+    fn forget_button(&mut self, ui: &mut egui::Ui, mac_id: &str) {
+        if self.forget_confirm.as_deref() == Some(mac_id) {
+            ui.horizontal(|ui| {
+                if ui.button(RichText::new("Forget it").color(Color32::from_rgb(220, 80, 80))).clicked() {
+                    self.hosts.retain(|h| h.mac_id != mac_id);
+                    identity::save_hosts(&self.hosts);
+                    self.forget_confirm = None;
+                }
+                if ui.button("Keep").clicked() {
+                    self.forget_confirm = None;
+                }
+            });
+        } else if ui.button("Forget…").on_hover_text("Remove this computer from the list. To use it again, pair again.").clicked() {
+            self.forget_confirm = Some(mac_id.to_string());
         }
     }
 
@@ -373,7 +394,7 @@ impl App {
         ui.add_space(8.0);
         let found = self.browser.found.lock().unwrap().clone();
         let mut shown = Vec::new();
-        egui::Grid::new("hosts").num_columns(3).spacing([16.0, 10.0]).striped(true).show(ui, |ui| {
+        egui::Grid::new("hosts").num_columns(4).spacing([16.0, 10.0]).striped(true).show(ui, |ui| {
             for f in &found {
                 let saved = self.saved_for(f);
                 if let Some(s) = &saved {
@@ -388,12 +409,17 @@ impl App {
                 });
                 let enabled = f.door.is_some() && f.address().is_some();
                 if ui.add_enabled(enabled, egui::Button::new(if saved.is_some() { "Connect" } else { "Pair…" })).clicked() {
-                    pick = Some(Target { name: f.name.clone(), addr: f.address().unwrap(), saved,
+                    pick = Some(Target { name: f.name.clone(), addr: f.address().unwrap(), saved: saved.clone(),
                                          pairing_required: f.pairing_required() });
+                }
+                match &saved {
+                    Some(s) => self.forget_button(ui, &s.mac_id),
+                    None => { ui.label(""); }
                 }
                 ui.end_row();
             }
-            for h in self.hosts.iter().filter(|h| !shown.contains(&h.mac_id)) {
+            let hosts = self.hosts.clone();
+            for h in hosts.iter().filter(|h| !shown.contains(&h.mac_id)) {
                 ui.label(RichText::new(&h.name).strong());
                 ui.label("Paired, not seen now");
                 if let Some(addr) = &h.last_address {
@@ -404,6 +430,7 @@ impl App {
                 } else {
                     ui.label("");
                 }
+                self.forget_button(ui, &h.mac_id);
                 ui.end_row();
             }
         });

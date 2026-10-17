@@ -11,6 +11,7 @@ USE
 1. Open Sill Viewer. Computers on your network show in a list.
 2. Click "Pair..." next to a computer. It shows a 12-digit code (and a QR window).
 3. Type the code. You pair one time. After that, click Connect.
+4. To remove a computer from the list: "Forget…", then "Forget it". Pair again to use it again.
 
 TRAY ICON
 Sill Viewer puts an icon in the tray (Windows: by the clock; Mac: the menu bar; Linux: the top bar).
