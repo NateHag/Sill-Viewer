@@ -259,6 +259,8 @@ package final class StreamCoordinator {
     /// subscribed, while Share clipboard with devices (`HostConfig.shareClipboard`) is on. Looks at
     /// nothing while nobody subscribes.
     let clipboard: HostClipboard
+    /// Sill Desktop Host: files both ways with Sill Viewer (kinds 201–206, HostFiles).
+    let files: HostFiles
     /// TEST ONLY. `SILL_TEST_MENU_PID=<pid>` on a --synthetic host: the test pattern's menus are that
     /// process's (the gates' fixture, Scripts/menufixture.swift), read and pressed through the same
     /// code, never activated (the Desktop's rule). Nil otherwise; `testMenuLine` is what `start`
@@ -320,6 +322,7 @@ package final class StreamCoordinator {
         launchID = launch
         // A synthetic host shares a pasteboard of its own, never this Mac's clipboard.
         clipboard = HostClipboard(server: server, enabled: config.shareClipboard, launchID: launch, synthetic: synthetic)
+        files = HostFiles(server: server)
         let hook = Self.testMenuHook(synthetic: synthetic)
         testMenuPID = hook.pid
         testMenuLine = hook.line
@@ -401,6 +404,7 @@ package final class StreamCoordinator {
                 if self.flipWait == id { self.flipWait = nil }
                 self.menus.clientLeft(connection)
                 self.clipboard.clientLeft(connection)
+                self.files.clientLeft(connection)
                 self.releaseKeys(of: id)
                 self.status.update { $0.devices.removeAll { $0.id == id } }
                 // The last device at home left devices away behind: the away quality, at once.
@@ -442,7 +446,14 @@ package final class StreamCoordinator {
             self.server.broadcast(StreamMessage(kind: .appList, timestamp: Date().timeIntervalSince1970,
                                                 isKeyframe: false, payload: Wire.encode(apps)))
         }
+        // Sill Desktop Host: file messages go straight to HostFiles, in order, off the main actor
+        // (a file's pieces must be written in the order they came).
+        let files = self.files
         server.onMessage = { [weak self] message, connection in
+            if HostFiles.handles(message.kind) {
+                files.received(message, from: connection)
+                return
+            }
             Task { @MainActor in await self?.handle(message, from: connection) }
         }
         catalog.onWindowsChanged = { [weak self] infos in
@@ -2322,7 +2333,8 @@ package final class StreamCoordinator {
         StreamMessage(kind: .windowList, timestamp: Date().timeIntervalSince1970, isKeyframe: false,
                       payload: Wire.encode(WindowList(macName: macName, windows: catalog.infos, active: active, launchID: launchID,
                                                       hostVersion: hostVersion, protocol: SillProtocol.current,
-                                                      gestures: TrackpadGesture.generation, clipboard: clipboard.advertised)))
+                                                      gestures: TrackpadGesture.generation, clipboard: clipboard.advertised,
+                                                      files: synthetic ? nil : 1)))
     }
 
     private func broadcastList() { server.broadcast(listMessage()) }

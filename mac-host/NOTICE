@@ -12,6 +12,9 @@ Changes in this copy (Apache 2.0, section 4b):
 - Automatic update checks off (Sill's releases are not this app's).
 - Scripts/make-app.sh: the new file names; quits Sill.app before installing.
 - Package.swift: the two probe targets left out.
+Additions:
+- Files both ways with Sill Viewer (Sources/SillHost/HostFiles.swift; message kinds 201–206 in
+  StreamMessage.swift; WindowList.files; StreamServer.pendingBytes(of:); Info.plist folder notes).
 Later additions are listed in README.md.
 
 This project is not made by, or affiliated with, the Sill team.

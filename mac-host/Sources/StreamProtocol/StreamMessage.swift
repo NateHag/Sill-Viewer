@@ -75,6 +75,14 @@ public enum StreamMessageKind: UInt8 {
                              // on), its text becomes the Mac's clipboard, and `stop` ends the subscription; only
                              // to a host whose window list says `clipboard` 1 or more. Host → device: text copied
                              // on the Mac (or sent by another device), only to a connection that subscribed
+    // Sill Desktop Host additions (also sill-linux and Sill Viewer): files both ways. Only to a host whose
+    // window list says `files` 1 or more. Sill's own readers map them to `.unknown` and skip them.
+    case fileStart = 201     // JSON {id, name (relative path, "/"), size, root}: a file is coming
+    case fileData = 202      // 4-byte big-endian id, then up to 128 KB of the file
+    case fileEnd = 203       // JSON {id, last}: the file is whole; `last` true on a batch's last file
+    case fileRequest = 204   // device → host, JSON {}: send me the files copied on the Mac (Finder's Copy)
+    case fileStatus = 205    // host → device, JSON {text}: a note for the person ("Saved 3 files to …")
+    case fileCancel = 206    // JSON {id}: that file stops; a half-written one is deleted
     case unknown = 255       // never sent: what parseHeader yields for a kind this build does not know
 }
 

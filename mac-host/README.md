@@ -31,8 +31,12 @@ certificate) is a new app to macOS after every rebuild, and it is quietly kept o
    quit and open the app.
 Test from another Mac:  dns-sd -B _sill._tcp   (this Mac's name must be listed)
 
+ADDED
+- Files both ways with Sill Viewer: drop files on the viewer window to save them in this Mac's
+  Downloads; copy files in Finder (Cmd+C), then click "Get copied files" in the viewer.
+  macOS asks once for access to Downloads (and to the folders you send from).
+
 PLANNED ADDITIONS
 - Scale menu: the Mac redraws bigger for a small viewer screen.
-- Files both ways, as with sill-linux.
 - Match this screen.
 - Works while the Mac is locked (a system service and a login window helper, macOS 14.4+).

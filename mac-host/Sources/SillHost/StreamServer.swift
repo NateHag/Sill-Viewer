@@ -1706,3 +1706,12 @@ enum ClientRoute: Equatable {
         }
     }
 }
+
+// Sill Desktop Host: for HostFiles, which waits while a connection has a lot still to take, so a big
+// file never fills memory or holds up the video for long.
+extension StreamServer {
+    /// The bytes this connection has been handed and not taken yet; nil once it is gone. Not on `queue`.
+    func pendingBytes(of connection: NWConnection) -> Int? {
+        queue.sync { clients[ObjectIdentifier(connection)]?.pendingBytes }
+    }
+}

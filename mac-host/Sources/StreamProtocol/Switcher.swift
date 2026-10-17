@@ -60,12 +60,15 @@ public struct WindowList: Codable {
     /// pull request #66's `Bool` (never released) does not decode here and becomes an Int as it
     /// rebases.
     public var clipboard: Int?
+    /// Sill Desktop Host: 1 when this host takes and sends files (kinds 201–206). Nil from Sill.
+    public var files: Int?
 
     public init(macName: String, windows: [WindowInfo], active: StreamSource, launchID: String? = nil,
-                hostVersion: String? = nil, protocol: Int? = nil, gestures: Int? = nil, clipboard: Int? = nil) {
+                hostVersion: String? = nil, protocol: Int? = nil, gestures: Int? = nil, clipboard: Int? = nil,
+                files: Int? = nil) {
         self.macName = macName; self.windows = windows; self.active = active; self.launchID = launchID
         self.hostVersion = hostVersion; self.protocol = `protocol`; self.gestures = gestures
-        self.clipboard = clipboard
+        self.clipboard = clipboard; self.files = files
     }
 }
 

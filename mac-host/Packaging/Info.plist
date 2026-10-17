@@ -36,6 +36,12 @@
 	</array>
 	<key>NSHumanReadableCopyright</key>
 	<string>Unofficial build of Sill (free and open source, Apache 2.0).</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>Files sent from your other computers are saved in Downloads.</string>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>Files you copy on the Desktop can be sent to your other computers.</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>Files you copy in Documents can be sent to your other computers.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Sill makes this Mac visible to your iPhone and iPad on the same network so they can stream its windows.</string>
 	<key>NSPrincipalClass</key>
