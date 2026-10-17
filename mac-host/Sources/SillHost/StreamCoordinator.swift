@@ -168,6 +168,9 @@ package final class StreamCoordinator {
     /// The client's last stream panel size and text scale. One stream, so with several clients
     /// the last one to report wins.
     private var viewport: Viewport?
+    /// Sill Desktop Host addition: the desktop on a virtual display sized to the viewer (Fit
+    /// screen, Match this screen). Only while the Desktop source streams with the virtual display on.
+    let desktopFit = DesktopFit()
     /// The windows Sill sized for a device in regular mode, each with its way back (WindowRestore,
     /// issue #57): recorded at the first fit (`fitToViewport`), put back when the window stops
     /// streaming (`restoreFits`), handed to the virtual display's stage when it takes the window.
@@ -753,6 +756,7 @@ package final class StreamCoordinator {
         if newFPS != fps || newScale != captureScale { return true }
         if pair.bitrate != bitrate || new.prioritizeSpeed != config.prioritizeSpeed { return true }
         if new.virtualDisplay != config.virtualDisplay, case .window = active { return true }
+        if new.virtualDisplay != config.virtualDisplay, active == .desktop, !synthetic { return true }
         return false
     }
 
@@ -1148,6 +1152,13 @@ package final class StreamCoordinator {
         // A different rate (a ProMotion device joined, Low Power Mode toggled) needs a new capture
         // interval and encoder session: one restart, whatever the source.
         if active != .none, effectiveFPS != fps { await select(active); return }
+        // Sill Desktop Host: Fit screen follows the viewer's window size.
+        if virtualDisplay, !synthetic, active == .desktop {
+            if let want = DesktopFit.wanted(viewport: viewport, sharp: captureScale >= 1.5), !desktopFit.matches(want) {
+                await select(.desktop)
+            }
+            return
+        }
         if virtualDisplay, stage.isStaged, case .window(let id) = active {
             // One restart: prepare re-places the window on the same display (the display is only
             // recreated if the envelope grew). The client's identical re-send after a switch is a
@@ -1327,6 +1338,13 @@ package final class StreamCoordinator {
         // frame (WindowRestore, issue #57): another window or the Desktop picked, `.none` when the
         // last device leaves or the stream stops. A restart of the same window keeps it fitted.
         if case .window(let next) = source { restoreFits(keeping: next) } else { restoreFits(keeping: nil) }
+        // Sill Desktop Host: the desktop's own virtual display lives only while the Desktop streams
+        // with Fit screen on.
+        if desktopFit.isOn, source != .desktop || !virtualDisplay || synthetic {
+            desktopFit.release()
+            try? await Task.sleep(nanoseconds: 800_000_000)   // macOS (then DesktopFit) makes a real display main again
+            await catalog.refreshWindows()
+        }
 
         var filter: SCContentFilter?     // nil only for the synthetic test pattern
         var sourceRect: CGRect? = nil    // set only when the window streams from the virtual display
@@ -1406,6 +1424,15 @@ package final class StreamCoordinator {
                 describe = "a synthetic test pattern\(useSoftwareEncoder ? " (software encoder)" : "")"
                 title = "Test Pattern"; kind = .testPattern
             } else {
+                // Sill Desktop Host: Fit screen sizes the desktop to the viewer on a virtual display
+                // that becomes the main one; the catalog then picks it as the display.
+                var fitScale: CGFloat?
+                if virtualDisplay, let want = DesktopFit.wanted(viewport: viewport, sharp: captureScale >= 1.5) {
+                    if await desktopFit.apply(want) { await catalog.refreshWindows() }
+                    guard !shuttingDown else { desktopFit.release(); active = .none; broadcastList(); return }
+                    // Match this screen: one stream pixel per viewer pixel, whatever Sharp says.
+                    if desktopFit.isOn, viewport?.pixelWidth != nil, !useSoftwareEncoder { fitScale = CGFloat(want.scale) }
+                }
                 guard let d = catalog.display else { active = .none; broadcastList(); return }
                 // Sill's own windows (Settings, Log, the pairing window with its code) never go out
                 // in a Desktop stream. Fixed here at pipeline start: a running SCStream is never
@@ -1423,7 +1450,8 @@ package final class StreamCoordinator {
                 } else {
                     filter = SCContentFilter(display: d, excludingWindows: [])
                 }
-                width = evenPixels(CGFloat(d.width) * captureScale); height = evenPixels(CGFloat(d.height) * captureScale)
+                let deskScale = fitScale ?? captureScale
+                width = evenPixels(CGFloat(d.width) * deskScale); height = evenPixels(CGFloat(d.height) * deskScale)
                 describe = "the whole desktop\(useSoftwareEncoder ? " (software encoder)" : "")"
                 title = "Whole Desktop"; kind = .desktop
             }
@@ -1905,6 +1933,7 @@ package final class StreamCoordinator {
         shuttingDown = true
         restoreFits(keeping: nil)
         stage.release()
+        desktopFit.release()
     }
 
     /// The CLI's default path at a signal (HostShutdown.installKeyRelease), just before it dies of it:
@@ -2393,7 +2422,7 @@ package final class StreamCoordinator {
                         awayBitrate: t.awayBitrate, awayCaptureScale: Double(t.awayCaptureScale),
                         thisConnectionAway: thisAway, awayRunning: awayWanted)
         }
-        return HostSettingsState(settings: t.streamSettings(away: thisAway),
+        var state = HostSettingsState(settings: t.streamSettings(away: thisAway),
                                  persistent: onDeviceSettingsChange != nil,
                                  virtualDisplayAvailable: appKitLoop,
                                  virtualDisplayNote: virtualDisplayNote(target: t, snapshot: s),
@@ -2402,6 +2431,8 @@ package final class StreamCoordinator {
                                  answering: answering,
                                  away: away,
                                  link: link)
+        state.pixelMatch = appKitLoop ? true : nil
+        return state
     }
 
     /// The Mac's Virtual Display pane in its order (SettingsPanes.swift, `statusText`), without the

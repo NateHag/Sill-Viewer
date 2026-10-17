@@ -60,6 +60,10 @@ A tag such as `v0.2.0` makes a release with the downloads attached.
 features above will come to Macs too (scaling, files, Match this screen, a locked Mac). Build it on
 the Mac with `cd mac-host && Scripts/make-app.sh --install --open`. See mac-host/README.md.
 
+Done so far: copy files both ways; Fit screen and Match this screen on the whole desktop (the
+desktop moves to a virtual screen of the viewer's size, which becomes the Mac's main screen; the
+real screens come back when you turn it off or disconnect).
+
 ## Linux host: install
 
 ```

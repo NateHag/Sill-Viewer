@@ -193,6 +193,9 @@ public struct HostSettingsState: Codable, Hashable, Sendable {
     public var away: AwayQuality?
     /// This connection's link while it cannot keep up; nil while it does, and from older hosts.
     public var link: LinkReport?
+    /// Sill Desktop Host addition: the host can size the desktop to the viewer's exact pixels
+    /// (Sill Viewer's "Match this screen"). nil from Sill's own host.
+    public var pixelMatch: Bool?
 
     public init(settings: StreamSettings, persistent: Bool, virtualDisplayAvailable: Bool,
                 virtualDisplayNote: String? = nil, softwareEncoder: Bool, stream: RunningStream? = nil,

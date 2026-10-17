@@ -20,9 +20,16 @@ public struct Viewport: Codable, Hashable {
     /// The host runs the stream at the highest rate among its connected clients and restarts the
     /// pipeline when that changes.
     public var fps: Int?
+    /// Sill Desktop Host addition. Sill Viewer's "Match this screen": the exact pixel size of the
+    /// viewer's monitor and its scale (2 on a Retina panel). nil from other clients.
+    public var pixelWidth: Int?
+    public var pixelHeight: Int?
+    public var pixelScale: Double?
 
-    public init(width: Double, height: Double, scale: Double?, localCursor: Bool? = nil, fps: Int? = nil) {
+    public init(width: Double, height: Double, scale: Double?, localCursor: Bool? = nil, fps: Int? = nil,
+                pixelWidth: Int? = nil, pixelHeight: Int? = nil, pixelScale: Double? = nil) {
         self.width = width; self.height = height; self.scale = scale; self.localCursor = localCursor; self.fps = fps
+        self.pixelWidth = pixelWidth; self.pixelHeight = pixelHeight; self.pixelScale = pixelScale
     }
 }
 

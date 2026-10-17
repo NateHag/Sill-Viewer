@@ -15,6 +15,9 @@ Changes in this copy (Apache 2.0, section 4b):
 Additions:
 - Files both ways with Sill Viewer (Sources/SillHost/HostFiles.swift; message kinds 201–206 in
   StreamMessage.swift; WindowList.files; StreamServer.pendingBytes(of:); Info.plist folder notes).
+- Fit screen and Match this screen for the whole desktop (Sources/SillHost/DesktopFit.swift;
+  hooks in StreamCoordinator; Viewport.pixelWidth/pixelHeight/pixelScale;
+  HostSettingsState.pixelMatch).
 Later additions are listed in README.md.
 
 This project is not made by, or affiliated with, the Sill team.
