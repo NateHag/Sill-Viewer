@@ -21,6 +21,16 @@ it on for Sill Desktop Host.
 Signing: the script uses your first "Apple Development" certificate, so the permissions stay
 granted across rebuilds. SILL_SIGN_IDENTITY="…" picks another one.
 
+IF OTHER COMPUTERS CAN'T FIND THIS MAC
+macOS ties the Local Network permission to the app's signature. An "ad hoc" build (no developer
+certificate) is a new app to macOS after every rebuild, and it is quietly kept off the network.
+1. Check:  codesign -dv /Applications/SillDesktopHost.app 2>&1 | grep Authority
+   No "Apple Development: …" line means ad hoc. In Xcode › Settings › Accounts › Manage
+   Certificates, add an Apple Development certificate, then build again.
+2. System Settings › Privacy & Security › Local Network: turn SillDesktopHost off and on, then
+   quit and open the app.
+Test from another Mac:  dns-sd -B _sill._tcp   (this Mac's name must be listed)
+
 PLANNED ADDITIONS
 - Scale menu: the Mac redraws bigger for a small viewer screen.
 - Files both ways, as with sill-linux.
