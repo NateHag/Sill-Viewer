@@ -19,7 +19,11 @@ impl Found {
     /// "host:port", IPv4 first.
     pub fn address(&self) -> Option<String> {
         let mut a = self.addresses.clone();
-        a.sort_by_key(|ip| !ip.is_ipv4());
+        a.sort_by_key(|ip| match ip {
+            std::net::IpAddr::V4(_) => 0,
+            std::net::IpAddr::V6(v) if (v.segments()[0] & 0xffc0) != 0xfe80 => 1,
+            _ => 2,   // link-local IPv6 needs an interface to dial
+        });
         a.first().map(|ip| match ip {
             std::net::IpAddr::V4(v) => format!("{v}:{}", self.port),
             std::net::IpAddr::V6(v) => format!("[{v}]:{}", self.port),
@@ -59,15 +63,23 @@ impl Browser {
                 match ev {
                     ServiceEvent::ServiceResolved(info) => {
                         let fullname = info.get_fullname().to_string();
+                        // A Mac also announces itself on its loopback interface: 127.0.0.1 and ::1 mean
+                        // "the computer that sent this", never this one, and cannot be dialed from here.
+                        let addrs: Vec<std::net::IpAddr> = info.get_addresses().iter().map(|a| a.to_ip_addr())
+                            .filter(|a| !a.is_loopback() && !a.is_unspecified()).collect();
+                        log::info!("found {fullname} at {addrs:?} port {}", info.get_port());
                         // A host on this same computer (a Mac running Sill): never offer it.
-                        if is_this_computer(info.get_addresses().iter()) {
+                        if addrs.is_empty() {
+                            continue;
+                        }
+                        if is_this_computer(addrs.iter()) {
                             log::info!("not listing {fullname}: it is this computer");
                             continue;
                         }
                         let name = fullname.strip_suffix("._sill._tcp.local.").unwrap_or(&fullname).replace("\\032", " ");
                         let f = Found {
                             name,
-                            addresses: info.get_addresses().iter().copied().collect(),
+                            addresses: addrs.clone(),
                             port: info.get_port(),
                             door: info.get_property_val_str("p").map(String::from),
                             tag: info.get_property_val_str("r").map(String::from),
@@ -80,6 +92,8 @@ impl Browser {
                         drop(l);
                         wake();
                     }
+                    ServiceEvent::ServiceFound(_, fullname) => log::info!("heard of {fullname}; asking for its address"),
+                    ServiceEvent::SearchStarted(_) => {}
                     ServiceEvent::ServiceRemoved(_, fullname) => {
                         list.lock().unwrap().retain(|x| x.fullname != fullname);
                         wake();
@@ -96,7 +110,7 @@ impl Browser {
 fn is_this_computer<'a>(addrs: impl Iterator<Item = &'a std::net::IpAddr>) -> bool {
     let local: Vec<std::net::IpAddr> = if_addrs::get_if_addrs().map(|v| v.iter().map(|i| i.ip()).collect()).unwrap_or_default();
     for a in addrs {
-        if a.is_loopback() || local.contains(a) {
+        if !a.is_loopback() && local.contains(a) {
             return true;
         }
     }
@@ -111,5 +125,8 @@ mod tests {
         assert!(super::is_this_computer(mine.iter()));
         let other: std::net::IpAddr = "203.0.113.9".parse().unwrap();
         assert!(!super::is_this_computer([other].iter()));
+        // Another computer's loopback address is not this computer.
+        let lo: std::net::IpAddr = "127.0.0.1".parse().unwrap();
+        assert!(!super::is_this_computer([lo].iter()));
     }
 }
