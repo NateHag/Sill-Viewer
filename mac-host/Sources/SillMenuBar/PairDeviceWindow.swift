@@ -433,10 +433,10 @@ struct CableNoticeView: View {
     /// The previews: no closing by itself.
     var still = false
 
-    @State private var removed = false
-    @State private var removeProblem: String?
+    @ViewState private var removed = false
+    @ViewState private var removeProblem: String?
     /// Remove clicks so far: each starts the 10 s again, so what it says stays long enough to read.
-    @State private var clicks = 0
+    @ViewState private var clicks = 0
 
     static let showsFor: Duration = .seconds(10)
 

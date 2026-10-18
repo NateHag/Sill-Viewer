@@ -40,9 +40,9 @@ struct DevicesPane: View {
     /// "Last connected 2 minutes ago" counts from here (fixed in the previews).
     var now: Date?
 
-    @State private var removedName: String?
+    @ViewState private var removedName: String?
     /// A Remove the keychain did not keep: the device's name and why.
-    @State private var removeProblem: (name: String, reason: String)?
+    @ViewState private var removeProblem: (name: String, reason: String)?
 
     /// Why devices can't connect at all: the identity (the key, the trust list) could not be used,
     /// so the home door has no listener. Nil when it works.
@@ -129,8 +129,8 @@ struct PairedDeviceRow: View {
     let remove: () -> Void
     let rename: (String) -> Void
 
-    @State private var editing = false
-    @State private var text = ""
+    @ViewState private var editing = false
+    @ViewState private var text = ""
     @FocusState private var focused: Bool
 
     var body: some View {

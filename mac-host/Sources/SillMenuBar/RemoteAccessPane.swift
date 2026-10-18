@@ -43,11 +43,11 @@ struct RemoteAccessPane: View {
     let addressName: String
     let actions: Actions
 
-    @State private var editingPort = false
-    @State private var portText = ""
-    @State private var portSaved = false
-    @State private var nameText: String?
-    @State private var nameProblem: String?
+    @ViewState private var editingPort = false
+    @ViewState private var portText = ""
+    @ViewState private var portSaved = false
+    @ViewState private var nameText: String?
+    @ViewState private var nameProblem: String?
 
     private var available: Bool { status.identityProblem == nil }
     private var on: Bool { remoteAccess && available }
@@ -364,7 +364,7 @@ struct RemoteAccessPane: View {
 private struct CopyButton: View {
     let text: String
     let spoken: String
-    @State private var copied = false
+    @ViewState private var copied = false
 
     var body: some View {
         Button(copied ? "Copied" : "Copy") {

@@ -20,6 +20,7 @@ Additions:
   HostSettingsState.pixelMatch).
 - Wakes the screens for a viewer and keeps them awake while one is connected; restarts the
   stream when the screens wake (Sources/SillHost/HostWake.swift; hooks in StreamCoordinator).
+- Builds with only the Command Line Tools: @State replaced by ViewState (no SwiftUI macro plugin).
 Later additions are listed in README.md.
 
 This project is not made by, or affiliated with, the Sill team.

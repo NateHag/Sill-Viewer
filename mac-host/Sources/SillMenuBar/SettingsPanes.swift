@@ -326,7 +326,7 @@ private struct StreamingPane: View {
 private struct VirtualDisplayPane: View {
     let model: AppModel
     @Bindable var settings: HostSettings
-    @State private var retrying = false
+    @ViewState private var retrying = false
 
     var body: some View {
         let snapshot = model.coordinator?.status.snapshot ?? HostStatusSnapshot()
