@@ -275,7 +275,11 @@ class Host:
             self._change_settings(s, json.loads(payload))
         elif kind == wire.CLIENT_STATS:
             st = json.loads(payload)
-            log.debug("%s: %s fps, frame age %s ms, rtt %s ms", s, st.get("fps"), st.get("frameAgeMs"), st.get("rttMs"))
+            now = time.monotonic()
+            if now - getattr(s, "stats_logged", 0) >= 10:     # every 10 s: what the viewer gets
+                s.stats_logged = now
+                log.info("%s sees %s fps, frame age %s ms (max %s), rtt %s ms", s, st.get("fps"), st.get("frameAgeMs"),
+                         st.get("frameAgeMaxMs"), st.get("rttMs"))
         elif kind == wire.PAIRING_WANTED:
             self.pairing.open_window()
         elif kind == wire.CLIPBOARD:
@@ -579,6 +583,19 @@ class Host:
         self._scale_virtual()
         p = self.pipeline
         if p is not None and self.running is not None:
+            # Every 10 s: the frames the encoder put out, per second. Low here means the screen
+            # (GNOME, PipeWire) or the encoder is slow; fine here but slow on the viewer means the
+            # network or the viewer.
+            now = time.monotonic()
+            m, mt = getattr(self, "rate_mark", (p.frames, now))
+            if now - mt >= 10 or p.frames < m:
+                if p.frames >= m and now > mt:
+                    r = self.running
+                    log.info("rate: %.1f frames/s encoded, %sx%s%s", (p.frames - m) / (now - mt), r.width, r.height,
+                             " (virtual)" if getattr(r, "virtual", False) else "")
+                self.rate_mark = (p.frames, now)
+            elif not hasattr(self, "rate_mark"):
+                self.rate_mark = (m, mt)
             n, t = self.last_frames
             if p.frames != n:
                 self.last_frames = (p.frames, time.monotonic())

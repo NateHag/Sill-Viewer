@@ -65,9 +65,13 @@ impl Session {
         let listed = Arc::new(AtomicBool::new(false));
         let (clip_tx, clip_rx) = channel::<String>();
         let events_out = events.clone();
+        // The worst frame age (host send to here, in ms; the clocks are assumed in sync) since the
+        // last stats report.
+        let age_max = Arc::new(AtomicU32::new(0));
 
         {
             let (conn, alive, frames, wake) = (conn.clone(), alive.clone(), frames.clone(), wake.clone());
+            let age_max_r = age_max.clone();
             let sill_clip_r = sill_clip.clone();
             let listed_r = listed.clone();
             let mut incoming = crate::files::Incoming::default();
@@ -89,6 +93,12 @@ impl Session {
                                 pending_params = false;
                             }
                             frames.fetch_add(1, Ordering::Relaxed);
+                            if m.ts > 0.0 {
+                                let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+                                    .map(|d| d.as_secs_f64()).unwrap_or(0.0);
+                                let age = ((now - m.ts) * 1000.0).clamp(0.0, 60_000.0) as u32;
+                                age_max_r.fetch_max(age, Ordering::Relaxed);
+                            }
                             let _ = video.send(VideoPacket { params: ps, nal_len, au: m.payload, key: m.key });
                         }
                         wire::WINDOW_LIST | wire::HOST_SETTINGS | wire::GOODBYE => {
@@ -147,11 +157,26 @@ impl Session {
             }).map_err(|e| e.to_string())?;
         }
         {
-            let (conn, alive) = (conn.clone(), alive.clone());
+            let (conn, alive, frames, age_max) = (conn.clone(), alive.clone(), frames.clone(), age_max.clone());
             std::thread::Builder::new().name("session ping".into()).spawn(move || {
+                let mut tick = 0u32;
+                let mut last_frames = frames.load(Ordering::Relaxed);
                 while alive.load(Ordering::Relaxed) {
                     if conn.send(&tls::ping_payload(start.elapsed().as_secs_f64())).is_err() {
                         break;
+                    }
+                    // Once a second: the frames that came in and the worst frame age, so the host's
+                    // log shows what this viewer gets.
+                    tick += 1;
+                    if tick % 4 == 0 {
+                        let n = frames.load(Ordering::Relaxed);
+                        let fps = n.wrapping_sub(last_frames);
+                        last_frames = n;
+                        let age = age_max.swap(0, Ordering::Relaxed);
+                        let stats = json!({"fps": fps, "frameAgeMs": if fps > 0 { age as i64 } else { -1 }, "rttMs": -1,
+                                           "device": format!("Sill Viewer ({})", crate::os_name()),
+                                           "frameAgeMaxMs": if fps > 0 { age as i64 } else { -1 }});
+                        let _ = conn.send(&wire::json(wire::CLIENT_STATS, &stats));
                     }
                     std::thread::sleep(Duration::from_millis(250));
                 }
