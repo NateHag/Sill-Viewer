@@ -118,6 +118,8 @@ def main():
     ap.add_argument("--scroll-speed", type=float, default=1.0)
     ap.add_argument("--trace-input", action="store_true",
                     help="log pointer and scroll events (never keys or text), to debug input")
+    ap.add_argument("--dmabuf", choices=["auto", "off"], default="auto",
+                    help="virtual screens: take frames from GNOME on the GPU (auto), or as copies in memory (off)")
     ap.add_argument("--test-source", action="store_true", help="stream a test pattern, without GNOME")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()

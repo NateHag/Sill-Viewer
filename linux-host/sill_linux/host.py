@@ -111,6 +111,8 @@ class Host:
         self.apply_pending = None
         self.idle_since = None
         self.last_frames = (0, time.monotonic())
+        self.dmabuf_bad = False       # GPU frames from a virtual screen failed once: copy instead
+        self.using_dmabuf = False
         self.input_state = {}        # session -> {"keys": set(), "buttons": set(), "finish": source id}
         self.bus = None
         self.mutter = False
@@ -510,14 +512,36 @@ class Host:
         extra = ""
         if el.find_property("keepalive-time"):
             extra += " keepalive-time=100"
-        if el.find_property("always-copy"):
+        # A virtual screen's frames as DMA-BUFs: GNOME hands over the GPU buffer, instead of
+        # copying every frame into memory first. With NVIDIA (GNOME 50) that copy held GNOME at
+        # about 5 frames a second. The frame then goes GL -> CUDA -> encoder without leaving the
+        # GPU. Any failure before the first frame turns this off for the rest of the run.
+        gl = (spec.virtual and getattr(self.args, "dmabuf", "auto") != "off" and not self.dmabuf_bad
+              and video.have("glupload") and video.have("glcolorconvert"))
+        self.using_dmabuf = gl
+        if el.find_property("always-copy") and not gl:
             extra += " always-copy=true"
-        caps = "video/x-raw"
+        caps = "video/x-raw(memory:DMABuf)" if gl else "video/x-raw"
         if self.fail_count % 2 == 0:
             caps += f",max-framerate={spec.fps}/1"
         if spec.virtual:
             caps += f",width={spec.width},height={spec.height}"
-        return f"pipewiresrc {target}={node} do-timestamp=true{extra} ! {caps}"
+        tail = ""
+        if gl:
+            forced = self.args.encoder or ""
+            nv = forced.startswith("nv") or (not forced and video.have("nvh265enc")
+                                            and ("nvh265enc", spec.fps) not in video._bad_encoders)
+            # NVIDIA's encoder takes GL memory directly (CUDA-GL interop); others need it back in memory.
+            tail = " ! glupload ! glcolorconvert ! video/x-raw(memory:GLMemory),format=RGBA"
+            if not nv:
+                tail += " ! gldownload"
+            log.info("virtual screen: frames on the GPU (DMA-BUF)")
+        return f"pipewiresrc {target}={node} do-timestamp=true{extra} ! {caps}{tail}"
+
+    def _dmabuf_failed(self, why):
+        if getattr(self, "using_dmabuf", False) and not self.dmabuf_bad:
+            self.dmabuf_bad = True
+            log.warning("GPU frames (DMA-BUF) did not work (%s); copying frames instead from now on", why)
 
     def _start_pipeline(self, spec, source_desc):
         if self.running is not spec:
@@ -527,11 +551,14 @@ class Host:
             w, h = _even(spec.width / 2), _even(spec.height / 2)
         try:
             self.pipeline = video.Pipeline(source_desc, w, h, spec.fps, spec.bitrate, spec.speed,
-                                           self._on_au, self._pipeline_failed, encoder=self.args.encoder)
+                                           self._on_au, self._pipeline_failed, encoder=self.args.encoder,
+                                           gpu_source=spec.kind == "mutter" and self.using_dmabuf)
             self.pipeline.start()
         except Exception as e:
             log.error("could not start the stream: %s", e)
             self.pipeline = None
+            if spec.kind == "mutter":
+                self._dmabuf_failed(str(e))
             self._too_fast(spec)
             self.fail_count += 1
             self._retry()
@@ -554,6 +581,8 @@ class Host:
         frames = self.pipeline.frames if self.pipeline else 0
         log.warning("stream stopped: %s", reason)
         self.fail_count = self.fail_count + 1 if frames == 0 else 0
+        if frames == 0:
+            self._dmabuf_failed(reason)
         if frames == 0 and self.running is not None:
             self._too_fast(self.running)
         self._stop_stream()
@@ -603,6 +632,8 @@ class Host:
                     self.fail_count = 0
             elif time.monotonic() - t > 8:
                 log.warning("no frames for 8 s; restarting the stream")
+                if p.frames == 0:
+                    self._dmabuf_failed("no frame in 8 s")
                 self._stop_stream()
                 self._retry()
         with self.lock:

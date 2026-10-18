@@ -119,8 +119,12 @@ class Pipeline:
     """One running capture+encode. on_au(param_sets or None, payload, is_key) is called from a
     GStreamer thread; on_failed(reason) from the main thread."""
 
-    def __init__(self, source_desc, enc_width, enc_height, fps, bitrate, speed, on_au, on_failed, encoder=None):
+    def __init__(self, source_desc, enc_width, enc_height, fps, bitrate, speed, on_au, on_failed, encoder=None,
+                 gpu_source=False):
         self.source_desc = source_desc
+        # Frames that come as GPU (GL) memory: a failure may be the source's, not the encoder's, so
+        # no encoder is marked bad and only the first is tried; the host then falls back to copies.
+        self.gpu_source = gpu_source
         self.enc_width, self.enc_height = enc_width, enc_height
         self.fps, self.bitrate, self.speed = fps, bitrate, speed
         self.on_au, self.on_failed = on_au, on_failed
@@ -140,7 +144,8 @@ class Pipeline:
     def candidates(self):
         if self.forced_encoder:
             return [self.forced_encoder]
-        return [e for e in ENCODERS if (e, self.fps) not in _bad_encoders and have(e)]
+        found = [e for e in ENCODERS if (e, self.fps) not in _bad_encoders and have(e)]
+        return found[:1] if self.gpu_source else found
 
     def start(self):
         kbps = max(1000, int(self.bitrate * self.fps / 60 / 1000))
@@ -174,7 +179,8 @@ class Pipeline:
             if r == Gst.StateChangeReturn.FAILURE:
                 errors.append(f"{enc}: could not start")
                 self._teardown()
-                _bad_encoders.add((enc, self.fps))
+                if not self.gpu_source:
+                    _bad_encoders.add((enc, self.fps))
                 continue
             log.info("encoding with %s at %d kbps, %d fps", enc, kbps, self.fps)
             return True
@@ -204,7 +210,7 @@ class Pipeline:
             src = msg.src
             factory = src.get_factory().get_name() if isinstance(src, Gst.Element) and src.get_factory() else ""
             encoder_side = factory in ENCODERS or factory in ("cudaupload", "cudaconvertscale", "vapostproc")
-            if self.frames == 0 and self.encoder and not self.forced_encoder and encoder_side:
+            if self.frames == 0 and self.encoder and not self.forced_encoder and encoder_side and not self.gpu_source:
                 if time.monotonic() - self.started < 10:
                     log.warning("encoder %s failed before its first frame; trying the next one", self.encoder)
                     _bad_encoders.add((self.encoder, self.fps))
