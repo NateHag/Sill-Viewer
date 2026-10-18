@@ -29,6 +29,10 @@ You pair one time. After that, tap and go.
 - **The bar:** each monitor, plus **Virtual Display**, a new screen sized to the iPad.
 - **Settings panel:** Quality (up to 150 Mbps), 60 or 120 fps, Retina or Standard,
   and **Virtual display**: when on, "Desktop" is a screen sized to the iPad.
+- **Fit screen / Match this screen (Sill Viewer):** the real monitor switches to its resolution
+  closest to the viewer window (or the viewer's whole screen), and back when you turn it off or
+  disconnect. A GNOME virtual screen would fit exactly, but on some GPUs (NVIDIA, GNOME 50) it
+  draws only a few frames a second. To use it anyway: run the host with `--fit virtual`.
 
 ## Commands
 
