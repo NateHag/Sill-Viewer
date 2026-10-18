@@ -304,6 +304,14 @@ echo "Built $app, version $(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVers
 echo "  identity keychain: ${keychain_note:-login keychain}"
 codesign -d -r- "$app" 2>&1 | sed -n 's/^# *designated => /  designated requirement: /p; s/^designated => /  designated requirement: /p'
 
+# Sill Desktop Host: a ready-made copy for Macs without Xcode, in the repo's downloads/. Commit and
+# push it; other Macs install it with downloads/install-mac-host.sh (no build there).
+if [ -d ../downloads ]; then
+    rm -f ../downloads/SillDesktopHost-mac.zip
+    ditto -c -k --keepParent "$app" ../downloads/SillDesktopHost-mac.zip
+    echo "Zipped ../downloads/SillDesktopHost-mac.zip (commit and push it for your other Macs)"
+fi
+
 dest="${SILL_INSTALL_DIR:-/Applications}/SillDesktopHost.app"
 if [ "$install" = 1 ]; then
     # An iPad build of the iOS client installed on this Mac would also be a Sill.app: never replace
