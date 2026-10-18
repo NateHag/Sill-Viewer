@@ -15,11 +15,21 @@ It builds SillDesktopHost.app, puts it in /Applications, quits Sill.app if it ru
 First run: allow Screen Recording and Accessibility when it asks (System Settings ›
 Privacy & Security). Pair your devices again: this app has its own identity.
 
-Only one host should run: in Sill › Settings › General, turn off "Open at login" for Sill, and turn
-it on for Sill Desktop Host.
+Only one host may run. Best: delete Sill.app from this Mac (and from Login Items). Two hosts both
+answer as this Mac, and the viewer can quietly reach Sill's own app, which has no Fit screen for the
+desktop. Both write to the same log file (~/Library/Logs/Sill/Sill.log).
+
+Screen Recording: SillDesktopHost must be in the UPPER list of System Settings › Privacy & Security
+› Screen & System Audio Recording (not "System Audio Recording Only"). Turn it on, then quit and
+open the app. Signs of a missing grant: "Waiting for picture", and "0 windows" in the log.
+
+No Xcode? The Command Line Tools are enough (the app gets a plain icon):
+  sudo softwareupdate -i "Command Line Tools for Xcode <version>"   (softwareupdate --list shows it)
 
 Signing: the script uses your first "Apple Development" certificate, so the permissions stay
-granted across rebuilds. SILL_SIGN_IDENTITY="…" picks another one.
+granted across rebuilds. SILL_SIGN_IDENTITY="…" picks another one (a name or the SHA-1 hash from
+security find-identity -v -p codesigning), for example a "Developer ID Application" certificate.
+A different certificate is a new app to macOS: allow Screen Recording and Accessibility again.
 
 IF OTHER COMPUTERS CAN'T FIND THIS MAC
 macOS ties the Local Network permission to the app's signature. An "ad hoc" build (no developer
@@ -36,7 +46,10 @@ ADDED
   Downloads; copy files in Finder (Cmd+C), then click "Get copied files" in the viewer.
   macOS asks once for access to Downloads (and to the folders you send from).
 
+- Fit screen and Match this screen for the whole desktop (a virtual screen of the viewer's size
+  becomes the main screen; the real screens come back when you turn it off or disconnect).
+- Wakes the screens for a viewer and keeps them awake while one is connected.
+
 PLANNED ADDITIONS
 - Scale menu: the Mac redraws bigger for a small viewer screen.
-- Match this screen.
 - Works while the Mac is locked (a system service and a login window helper, macOS 14.4+).
