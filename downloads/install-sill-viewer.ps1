@@ -34,10 +34,11 @@ if ($Uninstall) {
 
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 try {
-    $sha = (Invoke-WebRequest -UseBasicParsing -Headers @{ Accept = "application/vnd.github.sha" } `
-            -Uri "https://api.github.com/repos/$Repo/commits/main").Content.Trim()
+    # The commit as JSON: Windows PowerShell hands back other answer types as raw bytes.
+    $sha = [string](Invoke-RestMethod -UseBasicParsing -Headers @{ "User-Agent" = "SillViewer-updater" } `
+            -Uri "https://api.github.com/repos/$Repo/commits/main?per_page=1").sha
 } catch {
-    Say "No connection to GitHub; trying later."
+    Say "Could not ask GitHub for the newest version: $($_.Exception.Message)"
     exit 0
 }
 if ($sha -notmatch '^[0-9a-f]{40}$') { Say "Unexpected answer from GitHub."; exit 0 }
