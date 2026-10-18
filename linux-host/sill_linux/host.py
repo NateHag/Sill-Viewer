@@ -440,8 +440,14 @@ class Host:
                 vscale = float(ps) if isinstance(ps, (int, float)) and 0.5 <= ps <= 4 else 1.0
                 return Spec(kind="mutter", connector=None, virtual=True, width=_even(pw), height=_even(ph),
                             vscale=vscale, **dict(base, scale_half=False))
-            k = 1 if half else 2
-            # Points times 2 is a Retina screen: GNOME shows it at 200%, so text keeps its size.
+            # Fit screen: the window's own pixels (Sill Viewer says how many per point), so nothing
+            # is drawn, copied and encoded that the viewer then shrinks away. Older viewers and
+            # the iPad don't say: points times 2 (a Retina screen; GNOME shows it at 200%).
+            ppp = vp.get("pixelsPerPoint")
+            if isinstance(ppp, (int, float)) and 0.5 <= ppp <= 4:
+                k = 1.0 if half else max(1.0, float(ppp))
+            else:
+                k = 1 if half else 2
             return Spec(kind="mutter", connector=None, virtual=True, width=_even(vp["width"] * k),
                         height=_even(vp["height"] * k), vscale=float(k), **dict(base, scale_half=False))
         mon = next((m for m in self.monitors if window_id(m.connector) == wid), None)

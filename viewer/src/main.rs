@@ -153,7 +153,7 @@ fn headless(a: &[String], id: identity::Identity) -> i32 {
     if fps > 60 {
         s.send(wire::CHANGE_SETTINGS, &serde_json::json!({"token": 1, "maxFPS": fps}));
     }
-    s.viewport(1280.0, 800.0, fps, opt("--pixels").and_then(|p| { let (w, h) = p.split_once('x')?; Some((w.parse().ok()?, h.parse().ok()?, opt("--scale").and_then(|v| v.parse().ok()).unwrap_or(1.0))) }));
+    s.viewport(1280.0, 800.0, fps, opt("--pixels").and_then(|p| { let (w, h) = p.split_once('x')?; Some((w.parse().ok()?, h.parse().ok()?, opt("--scale").and_then(|v| v.parse().ok()).unwrap_or(1.0))) }), 1.0);
     if let Some(p) = opt("--send") {
         s.send_files(vec![std::path::PathBuf::from(p)]);
     }

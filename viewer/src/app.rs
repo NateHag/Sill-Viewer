@@ -70,7 +70,7 @@ struct Live {
     files_ok: bool,
     settings: Option<Value>,
     rtt: f64,
-    sent_viewport: (f32, f32, u32, u32, u32),
+    sent_viewport: (f32, f32, u32, u32, u32, u32),
     match_screen: bool,
     sent_mods: Modifiers,
     buttons_down: Vec<&'static str>,
@@ -232,7 +232,7 @@ impl App {
                 if live.fps == 120 && max < 120 {
                     setting(live, "maxFPS", json!(120));
                 }
-                live.sent_viewport = (0.0, 0.0, 0, 0, 0);     // sends the new rate with the next frame
+                live.sent_viewport = (0.0, 0.0, 0, 0, 0, 0);     // sends the new rate with the next frame
             }
             "sharp" => {
                 let sharp = live.settings.as_ref().and_then(|v| v["settings"]["captureScale"].as_f64()).unwrap_or(2.0) >= 1.5;
@@ -301,7 +301,7 @@ impl App {
                 decode::spawn(v_rx, shared.clone(), wake.clone());
                 Box::new(Live {
                     session, events: ev_rx, shared, windows: vec![], active: json!({"none": {}}), mac_name: t.name.clone(), machines: vec![], switch_to: None, note: None, auto_pick: None, listed: false, pan: (0.5, 0.5), files_ok: false,
-                    settings: None, rtt: 0.0, sent_viewport: (0.0, 0.0, 0, 0, 0), match_screen: false, sent_mods: Modifiers::NONE,
+                    settings: None, rtt: 0.0, sent_viewport: (0.0, 0.0, 0, 0, 0, 0), match_screen: false, sent_mods: Modifiers::NONE,
                     buttons_down: vec![], scroll_open: None, last_pos: (0.5, 0.5), token: 0, fps: 60,
                     cursor_in_video: false, fullscreen: false, os_fullscreen: None,
                 })
@@ -585,7 +585,7 @@ fn toggle_match(ctx: &egui::Context, live: &mut Live) {
         live.fullscreen = live.match_screen;
         ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(live.fullscreen));
     }
-    live.sent_viewport = (0.0, 0.0, 0, 0, 0);
+    live.sent_viewport = (0.0, 0.0, 0, 0, 0, 0);
 }
 
 fn setting(live: &mut Live, field: &str, value: Value) {
@@ -824,10 +824,12 @@ fn stream(ctx: &egui::Context, live: &mut Live, target: &Target) -> Option<Strin
             _ => None,
         };
         let size = if live.match_screen { monitor.unwrap_or(avail.size()) } else { avail.size() };
-        let vp = (size.x.round(), size.y.round(), live.fps, pixels.map_or(0, |p| p.0), pixels.map_or(0, |p| p.1));
+        let ppp_now = ppp.unwrap_or(1.0);
+        let vp = (size.x.round(), size.y.round(), live.fps, pixels.map_or(0, |p| p.0), pixels.map_or(0, |p| p.1),
+                  (ppp_now * 100.0).round() as u32);
         if vp != live.sent_viewport && avail.width() > 50.0 {
             live.sent_viewport = vp;
-            live.session.viewport(vp.0 as f64, vp.1 as f64, vp.2, pixels);
+            live.session.viewport(vp.0 as f64, vp.1 as f64, vp.2, pixels, ppp_now);
         }
         handle_input(ctx, live, rect, resp.hovered() || resp.dragged(), &mut leave);
     });
