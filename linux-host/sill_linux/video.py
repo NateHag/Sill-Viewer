@@ -129,6 +129,7 @@ class Pipeline:
         self.sink = None
         self.encoder = None
         self.frames = 0
+        self.captured = 0     # frames out of PipeWire, before the queue that may drop them
         self.started = 0.0
         self.param_sets = None
         self.capture_size = None
@@ -162,6 +163,8 @@ class Pipeline:
             self.pipeline = pipeline
             self.sink = pipeline.get_by_name("sink")
             self.sink.connect("new-sample", self._sample)
+            pad = pipeline.get_by_name("srccaps").get_static_pad("src")
+            pad.add_probe(Gst.PadProbeType.BUFFER, self._count_captured)
             bus = pipeline.get_bus()
             bus.add_signal_watch()
             bus.connect("message", self._message)
@@ -176,6 +179,10 @@ class Pipeline:
             log.info("encoding with %s at %d kbps, %d fps", enc, kbps, self.fps)
             return True
         raise RuntimeError("no HEVC encoder works: " + "; ".join(errors or ["none installed"]))
+
+    def _count_captured(self, _pad, _info):
+        self.captured += 1
+        return Gst.PadProbeReturn.OK
 
     def _teardown(self):
         if self.pipeline is not None:

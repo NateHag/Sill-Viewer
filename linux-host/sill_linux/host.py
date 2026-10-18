@@ -587,15 +587,15 @@ class Host:
             # (GNOME, PipeWire) or the encoder is slow; fine here but slow on the viewer means the
             # network or the viewer.
             now = time.monotonic()
-            m, mt = getattr(self, "rate_mark", (p.frames, now))
+            m, c, mt = getattr(self, "rate_mark", (p.frames, p.captured, now))
             if now - mt >= 10 or p.frames < m:
                 if p.frames >= m and now > mt:
                     r = self.running
-                    log.info("rate: %.1f frames/s encoded, %sx%s%s", (p.frames - m) / (now - mt), r.width, r.height,
-                             " (virtual)" if getattr(r, "virtual", False) else "")
-                self.rate_mark = (p.frames, now)
+                    log.info("rate: %.1f frames/s from GNOME, %.1f encoded, %sx%s%s", (p.captured - c) / (now - mt),
+                             (p.frames - m) / (now - mt), r.width, r.height, " (virtual)" if getattr(r, "virtual", False) else "")
+                self.rate_mark = (p.frames, p.captured, now)
             elif not hasattr(self, "rate_mark"):
-                self.rate_mark = (m, mt)
+                self.rate_mark = (m, c, mt)
             n, t = self.last_frames
             if p.frames != n:
                 self.last_frames = (p.frames, time.monotonic())
