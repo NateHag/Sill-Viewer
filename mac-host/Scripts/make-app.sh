@@ -130,6 +130,10 @@ cp "$icon_out"/compiled/* "$stage/Contents/Resources/" 2>/dev/null || true
 # which a renewal keeps. (`|| true`: no keychain or no match must fall through to the ad hoc
 # warning below, not end the script under `set -e`.)
 identity="${SILL_SIGN_IDENTITY:-$(security find-identity -v -p codesigning 2>/dev/null | awk '/"Apple Development: / { print $2; exit }' || true)}"
+# Sill Desktop Host: a Mac with only a Developer ID certificate signs with that, not ad hoc.
+if [ -z "$identity" ]; then
+    identity="$(security find-identity -v -p codesigning 2>/dev/null | awk '/"Developer ID Application: / { print $2; exit }' || true)"
+fi
 if [ -z "$identity" ]; then
     identity="-"
     echo "warning: no Apple Development identity in the keychain; signing ad hoc. Screen Recording and" >&2

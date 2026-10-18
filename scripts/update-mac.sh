@@ -71,9 +71,24 @@ if [ -d "$viewer_app" ] && { [ $force = 1 ] || grep -q '^viewer/' <<<"$changed";
     if (cd viewer && ./build-mac.sh); then echo "$(stamp) Sill Viewer installed"; else echo "$(stamp) Sill Viewer build FAILED"; fi
 fi
 if [ -d "$host_app" ] && { [ $force = 1 ] || grep -q '^mac-host/' <<<"$changed"; }; then
-    echo "$(stamp) building Sill Desktop Host"
-    if (cd mac-host && Scripts/make-app.sh --install --open); then echo "$(stamp) Sill Desktop Host installed"
-    else echo "$(stamp) Sill Desktop Host build FAILED"; fi
+    # Sign with the certificate the installed host has: macOS ties Screen Recording, Accessibility
+    # and Local Network to the signature, so a different one (or none) loses them all.
+    signer="$(codesign -dv --verbose=2 "$host_app" 2>&1 | sed -n 's/^Authority=//p' | head -1)"
+    ident="${SILL_SIGN_IDENTITY:-}"
+    if [ -z "$ident" ] && [ -n "$signer" ]; then
+        ident="$(security find-identity -v -p codesigning 2>/dev/null | awk -v a="\"$signer\"" 'index($0, a) { print $2; exit }')"
+    fi
+    if [ -z "$ident" ]; then
+        echo "$(stamp) host NOT updated: no signing certificate in the keychain matches the installed host"
+        echo "$(stamp)   (installed signer: ${signer:-none}); set SILL_SIGN_IDENTITY in ~/.config/sill-update.conf"
+    else
+        echo "$(stamp) building Sill Desktop Host, signed by ${signer:-$ident}"
+        if (cd mac-host && SILL_SIGN_IDENTITY="$ident" Scripts/make-app.sh --install --open); then
+            echo "$(stamp) Sill Desktop Host installed"
+        else
+            echo "$(stamp) Sill Desktop Host build FAILED"
+        fi
+    fi
 fi
 # Sill's own app answers as this Mac too, and viewers may reach it instead of this host.
 if [ -d "$host_app" ] && pgrep -f 'Sill\.app/Contents/MacOS/Sill$' >/dev/null; then
