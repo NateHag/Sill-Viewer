@@ -98,5 +98,9 @@ if [ -z "$NO_INSTALL" ]; then
     rm -rf "/Applications/Sill Viewer.app"
     ditto "$APP" "/Applications/Sill Viewer.app"
     echo "Installed: /Applications/Sill Viewer.app"
+    # Only one Sill Viewer in Launchpad and Spotlight: forget and remove the build copy (the zip
+    # in target/ keeps it for other Macs).
+    /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -u "$PWD/$APP" 2>/dev/null || true
+    rm -rf "$APP"
     echo "Open it from Launchpad, Spotlight (Cmd+Space, \"Sill Viewer\") or the Applications folder."
 fi
