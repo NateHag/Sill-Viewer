@@ -58,6 +58,12 @@ struct Live {
     switch_to: Option<String>,
     /// The last file transfer note, and when it came.
     note: Option<(String, Instant)>,
+    /// The automatic Desktop picks: when the last went out, and how many in a row found nothing
+    /// streaming afterwards. A host that cannot start its desktop answers each pick with "none"
+    /// at once, so without a pause the two would loop as fast as the network allows.
+    auto_pick: Option<(Instant, u32)>,
+    /// A window list has arrived: the host is ready for a pick.
+    listed: bool,
     /// Where a zoomed picture is panned to, as fractions (follows the pointer).
     pan: (f32, f32),
     /// The host takes and sends files (sill-linux says so in its window list; Sill on a Mac does not).
@@ -294,7 +300,7 @@ impl App {
             let r = Session::start(&t.addr, &id, pin, ev_tx, v_tx, wake.clone()).map(|session| {
                 decode::spawn(v_rx, shared.clone(), wake.clone());
                 Box::new(Live {
-                    session, events: ev_rx, shared, windows: vec![], active: json!({"none": {}}), mac_name: t.name.clone(), machines: vec![], switch_to: None, note: None, pan: (0.5, 0.5), files_ok: false,
+                    session, events: ev_rx, shared, windows: vec![], active: json!({"none": {}}), mac_name: t.name.clone(), machines: vec![], switch_to: None, note: None, auto_pick: None, listed: false, pan: (0.5, 0.5), files_ok: false,
                     settings: None, rtt: 0.0, sent_viewport: (0.0, 0.0, 0, 0, 0), match_screen: false, sent_mods: Modifiers::NONE,
                     buttons_down: vec![], scroll_open: None, last_pos: (0.5, 0.5), token: 0, fps: 60,
                     cursor_in_video: false, fullscreen: false, os_fullscreen: None,
@@ -602,8 +608,9 @@ fn stream(ctx: &egui::Context, live: &mut Live, target: &Target) -> Option<Strin
                 live.cursor_in_video = v["cursorInVideo"] == true;
                 live.mac_name = v["macName"].as_str().unwrap_or(&target.name).to_string();
                 live.active = v["active"].clone();
-                if live.active.get("none").is_some() {
-                    live.session.select(json!({"desktop": {}}));
+                live.listed = true;
+                if live.active.get("none").is_none() {
+                    live.auto_pick = None;
                 }
             }
             Event::HostSettings(v) => live.settings = Some(v),
@@ -614,6 +621,22 @@ fn stream(ctx: &egui::Context, live: &mut Live, target: &Target) -> Option<Strin
                     .unwrap_or_else(|| format!("{} ended the session ({}).", live.mac_name, v["reason"].as_str().unwrap_or("?"))));
             }
             Event::Ended(why) => return Some(format!("{}: {why}", live.mac_name)),
+        }
+    }
+    // Nothing streams: pick the Desktop, 0.5 s after a failed try, doubling to 8 s. A host that
+    // cannot start its desktop answers each pick with "none" at once, so without the pause the two
+    // loop as fast as the network allows (seen on a Mac host: 25 failed starts a second).
+    if live.listed && live.active.get("none").is_some() {
+        let due = match live.auto_pick {
+            None => true,
+            Some((at, n)) => at.elapsed() >= Duration::from_millis((250u64 << (n + 1).min(5)).min(8000)),
+        };
+        if due {
+            let n = live.auto_pick.map(|(_, n)| n + 1).unwrap_or(0);
+            live.auto_pick = Some((Instant::now(), n));
+            live.session.select(json!({"desktop": {}}));
+        } else {
+            ctx.request_repaint_after(Duration::from_millis(250));
         }
     }
     let mut leave = None;

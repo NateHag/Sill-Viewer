@@ -173,6 +173,11 @@ package final class StreamCoordinator {
     let desktopFit = DesktopFit()
     /// Sill Desktop Host addition: wakes the screens for a viewer and keeps them awake.
     let wake = HostWake()
+    /// Sill Desktop Host addition: failed starts in a row, and when the last one failed. A client
+    /// that picks again as soon as it hears nothing streams would otherwise loop (seen: 25 failed
+    /// 5K starts a second, which froze the Mac's display).
+    private var startFailures = 0
+    private var lastStartFailure: TimeInterval = 0
     /// The windows Sill sized for a device in regular mode, each with its way back (WindowRestore,
     /// issue #57): recorded at the first fit (`fitToViewport`), put back when the window stops
     /// streaming (`restoreFits`), handed to the virtual display's stage when it takes the window.
@@ -1242,6 +1247,11 @@ package final class StreamCoordinator {
     func select(_ source: StreamSource, bringForward: Bool = false) async {
         guard !switching, !shuttingDown else { return }
         switching = true
+        if source != .none, startFailures > 0 {
+            let wait = min(0.25 * pow(2, Double(min(startFailures, 6))), 10)
+            let left = wait - (ProcessInfo.processInfo.systemUptime - lastStartFailure)
+            if left > 0 { try? await Task.sleep(nanoseconds: UInt64(left * 1_000_000_000)) }
+        }
         if source != active { missingPolls = 0 }    // a window's looks off the list are its own
         restartOf = (source == active && source != .none) ? source : nil
         defer {
@@ -1473,6 +1483,7 @@ package final class StreamCoordinator {
         }
 
         do {
+            defer { if active == source { startFailures = 0 } }
             try await startPipeline(source: source, filter: filter, sourceRect: sourceRect, width: width, height: height, describe: describe,
                                     title: title, kind: kind)
         } catch {
@@ -1493,6 +1504,7 @@ package final class StreamCoordinator {
                     active = .none
                 }
             } else {
+                startFailures += 1; lastStartFailure = ProcessInfo.processInfo.systemUptime
                 print("Could not start streaming \(describe): \(error)")
                 if virtualDisplay { stage.release() }   // nothing streams: never leave a window on the virtual display
                 active = .none
