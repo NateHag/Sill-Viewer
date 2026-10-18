@@ -76,6 +76,13 @@ impl Browser {
                             log::info!("not listing {fullname}: it is this computer");
                             continue;
                         }
+                        // Addresses can miss (a VPN, a second network): the host name is a second check.
+                        if let Some(mine) = this_host_name() {
+                            if same_host(info.get_hostname(), mine) {
+                                log::info!("not listing {fullname}: host {} is this computer", info.get_hostname());
+                                continue;
+                            }
+                        }
                         let name = fullname.strip_suffix("._sill._tcp.local.").unwrap_or(&fullname).replace("\\032", " ");
                         let f = Found {
                             name,
@@ -117,8 +124,60 @@ fn is_this_computer<'a>(addrs: impl Iterator<Item = &'a std::net::IpAddr>) -> bo
     false
 }
 
+/// A host name in the form Bonjour compares: lowercase, no trailing dot, no ".local".
+fn normalize_host(h: &str) -> String {
+    let h = h.trim().trim_end_matches('.').to_lowercase();
+    h.strip_suffix(".local").map(String::from).unwrap_or(h)
+}
+
+/// True when a service's host name (as `info.get_hostname()` gives it) is this computer's.
+fn same_host(service_host: &str, mine: &str) -> bool {
+    let s = normalize_host(service_host);
+    !s.is_empty() && s == normalize_host(mine)
+}
+
+/// This computer's Bonjour name, normalized. Read once.
+fn this_host_name() -> Option<&'static str> {
+    static NAME: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    NAME.get_or_init(|| {
+        let raw = read_host_name()?;
+        let n = normalize_host(&raw);
+        log::info!("this computer's Bonjour name: {n}");
+        (!n.is_empty()).then_some(n)
+    }).as_deref()
+}
+
+#[cfg(target_os = "macos")]
+fn read_host_name() -> Option<String> {
+    let out = std::process::Command::new("/usr/sbin/scutil").args(["--get", "LocalHostName"]).output().ok()?;
+    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+#[cfg(windows)]
+fn read_host_name() -> Option<String> {
+    std::env::var("COMPUTERNAME").ok()
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn read_host_name() -> Option<String> {
+    std::fs::read_to_string("/etc/hostname").ok()
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn host_names() {
+        use super::same_host;
+        assert!(same_host("Nates-MacBook-Pro.local.", "Nates-MacBook-Pro"));
+        assert!(same_host("nate-ms-7e70.local", "nate-MS-7E70\n"));
+        assert!(same_host("NATE2.local.", "NATE2"));
+        assert!(!same_host("Nates-Mac-mini.local.", "Nates-MacBook-Pro"));
+        assert!(!same_host("", ""));
+        assert!(!same_host(".local.", "local"));
+        // The cached name reads without failing on this computer.
+        let _ = super::this_host_name();
+    }
+
     #[test]
     fn this_computer() {
         let mine: Vec<std::net::IpAddr> = if_addrs::get_if_addrs().unwrap().iter().map(|i| i.ip()).collect();
