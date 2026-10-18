@@ -306,7 +306,7 @@ codesign -d -r- "$app" 2>&1 | sed -n 's/^# *designated => /  designated requirem
 
 # Sill Desktop Host: a ready-made copy for Macs without Xcode, in the repo's downloads/. Commit and
 # push it; other Macs install it with downloads/install-mac-host.sh (no build there).
-if [ -d ../downloads ]; then
+if [ -d ../downloads ] && [ -z "${SILL_NO_ZIP:-}" ]; then
     rm -f ../downloads/SillDesktopHost-mac.zip
     ditto -c -k --keepParent "$app" ../downloads/SillDesktopHost-mac.zip
     echo "Zipped ../downloads/SillDesktopHost-mac.zip (commit and push it for your other Macs)"

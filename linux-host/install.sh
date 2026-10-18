@@ -64,6 +64,9 @@ systemctl --user restart sill-linux.service sill-linux-tray.service
 sleep 2
 systemctl --user --no-pager status sill-linux.service | head -5
 
+echo "==> Automatic updates (every hour, from GitHub)"
+./update.sh --install
+
 echo
 echo "Done. On your iPad, open Sill. Tap this computer. Then type the code from the notification."
 echo "Log:  journalctl --user -u sill-linux -f"

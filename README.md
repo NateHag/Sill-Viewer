@@ -64,6 +64,24 @@ Done so far: copy files both ways; Fit screen and Match this screen on the whole
 desktop moves to a virtual screen of the viewer's size, which becomes the Mac's main screen; the
 real screens come back when you turn it off or disconnect).
 
+## Automatic updates
+
+Each machine checks GitHub every hour and installs what changed. Set it up once per machine:
+
+- **Mac** (viewer and/or host, whichever is in /Applications):
+  `~/Sill-Viewer/scripts/update-mac.sh --install`
+  Optional signing setting in `~/.config/sill-update.conf`, e.g. `SILL_SIGN_IDENTITY=<SHA-1 hash>`.
+  Log: `~/Library/Logs/sill-update.log`. Update now: `~/Sill-Viewer/scripts/update-mac.sh --force`.
+- **Linux host:** `install.sh` sets it up (or `./update.sh --install` in the host folder).
+  Log: `journalctl --user -u sill-linux-update`.
+- **Windows viewer** (PowerShell):
+  ```
+  $f="$env:TEMP\install-sill-viewer.ps1"
+  iwr https://raw.githubusercontent.com/NateHag/Sill-Viewer/main/downloads/install-sill-viewer.ps1 -OutFile $f
+  powershell -ExecutionPolicy Bypass -File $f
+  ```
+  Installs to `%LOCALAPPDATA%\Programs\SillViewer` with a Start menu entry. Log: `update.log` there.
+
 ## Linux host: install
 
 ```
