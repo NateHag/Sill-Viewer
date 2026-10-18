@@ -171,6 +171,8 @@ package final class StreamCoordinator {
     /// Sill Desktop Host addition: the desktop on a virtual display sized to the viewer (Fit
     /// screen, Match this screen). Only while the Desktop source streams with the virtual display on.
     let desktopFit = DesktopFit()
+    /// Sill Desktop Host addition: wakes the screens for a viewer and keeps them awake.
+    let wake = HostWake()
     /// The windows Sill sized for a device in regular mode, each with its way back (WindowRestore,
     /// issue #57): recorded at the first fit (`fitToViewport`), put back when the window stops
     /// streaming (`restoreFits`), handed to the virtual display's stage when it takes the window.
@@ -356,9 +358,20 @@ package final class StreamCoordinator {
         menus.onSubscribersChanged = { [weak self] any in self?.watchFrontmostApp(any) }
         catalog.onPolled = { [weak self] in self?.menusPolled() }
 
+        // Sill Desktop Host: a capture started while the screens slept may never deliver; start it
+        // again once they are awake.
+        wake.onScreensWoke = { [weak self] in
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                guard let self, self.catalog.clientCount > 0, self.active != .none else { return }
+                print("Wake: restarting the stream")
+                await self.select(self.active)
+            }
+        }
         server.onClientConnected = { [weak self] connection, route, link in
             Task { @MainActor in
                 guard let self else { return }
+                self.wake.activity(force: true)
                 let id = ObjectIdentifier(connection)
                 self.routes[id] = route
                 // A paired device shows its paired name until its own stats arrive, and a remote one
@@ -426,6 +439,7 @@ package final class StreamCoordinator {
                 guard let self else { return }
                 let wasEmpty = self.catalog.clientCount == 0
                 self.catalog.clientCount = count          // the catalog idles itself at 0
+                self.wake.devicesPresent(count > 0)
                 // Nobody is watching: stop capturing and encoding. The next client picks afresh.
                 if count == 0 { self.viewport = nil; self.clientFPS = [:] }   // the next device starts from scratch
                 if count == 0 { self.gestureChords.forget() }                 // and did not open a view it could close
@@ -929,6 +943,7 @@ package final class StreamCoordinator {
             }
         case .input:
             guard let event = Wire.decode(InputEvent.self, from: message.payload) else { return }
+            wake.activity()
             let device = ObjectIdentifier(connection)
             guard let rect = currentSourceRect() else {
                 // Nothing streams (between sources, or the stream stopped: the window closed under a

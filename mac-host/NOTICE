@@ -18,6 +18,8 @@ Additions:
 - Fit screen and Match this screen for the whole desktop (Sources/SillHost/DesktopFit.swift;
   hooks in StreamCoordinator; Viewport.pixelWidth/pixelHeight/pixelScale;
   HostSettingsState.pixelMatch).
+- Wakes the screens for a viewer and keeps them awake while one is connected; restarts the
+  stream when the screens wake (Sources/SillHost/HostWake.swift; hooks in StreamCoordinator).
 Later additions are listed in README.md.
 
 This project is not made by, or affiliated with, the Sill team.
