@@ -111,6 +111,8 @@ class Host:
         self.apply_pending = None
         self.idle_since = None
         self.last_frames = (0, time.monotonic())
+        self.fit_saved = None         # the layout before Fit screen changed a real monitor's mode
+        self.fit_target = None        # (connector, width, height) last asked for
         self.dmabuf_bad = False       # GPU frames from a virtual screen failed once: copy instead
         self.using_dmabuf = False
         self.input_state = {}        # session -> {"keys": set(), "buttons": set(), "finish": source id}
@@ -151,6 +153,7 @@ class Host:
             s.close({"reason": "quit"})
         time.sleep(0.15)
         self._stop_stream()
+        self._fit_release()
         self.advertiser.stop()
         self.loop.quit()
         return False
@@ -417,8 +420,10 @@ class Host:
             active = dict(self.active)
             idle_since = self.idle_since
         if "none" in active or self.settings["paused"]:
+            self._fit_release()
             return None
         if not sessions and (idle_since is None or time.monotonic() - idle_since > 10):
+            self._fit_release()
             return None
         if not sessions and self.running is not None:
             return self.running      # the 10 s after the last device leaves: keep what runs, a quick return reuses it
@@ -429,7 +434,17 @@ class Host:
         base = dict(fps=fps, bitrate=s["bitrate"], speed=s["prioritizeSpeed"], scale_half=half,
                     cursor=self._cursor_in_video(sessions))
         wid = active.get("window", {}).get("_0") if "window" in active else None
-        want_virtual = wid == VIRTUAL_ID or ("desktop" in active and s["virtualDisplay"])
+        fit = "desktop" in active and s["virtualDisplay"] and self.mutter and not self.args.test_source
+        if fit and getattr(self.args, "fit", "monitor") == "monitor":
+            # Fit screen and Match this screen on the real monitor: it switches to its mode
+            # closest to the viewer's size, and streams through the normal (fast) path. A GNOME
+            # virtual screen is exact, but on some GPUs (NVIDIA, GNOME 50) it draws only a few
+            # frames a second.
+            self._fit_monitor(sessions, half)
+            fit = False
+        else:
+            self._fit_release()
+        want_virtual = wid == VIRTUAL_ID or fit
         # GNOME sends at most one frame per screen refresh: asking for more only fails.
         if want_virtual:
             base["fps"] = min(base["fps"], 60)
@@ -537,6 +552,51 @@ class Host:
                 tail += " ! gldownload"
             log.info("virtual screen: frames on the GPU (DMA-BUF)")
         return f"pipewiresrc {target}={node} do-timestamp=true{extra} ! {caps}{tail}"
+
+    def _fit_size(self, sessions, half):
+        """The size the viewer wants: its monitor's pixels (Match this screen), else its window's points."""
+        vps = [x.viewport for x in sessions if x.viewport]
+        if not vps:
+            return None
+        vp = vps[-1]
+        pw, ph = vp.get("pixelWidth"), vp.get("pixelHeight")
+        if isinstance(pw, (int, float)) and isinstance(ph, (int, float)) and pw >= 320 and ph >= 240:
+            return int(pw), int(ph)
+        # Fit screen: the window's size in points, as on a Mac host (the desktop gets the window's
+        # size, so text stays the size it is on the viewer's own screen).
+        w, h = vp.get("width"), vp.get("height")
+        if not isinstance(w, (int, float)) or not isinstance(h, (int, float)) or w < 100 or h < 100:
+            return None
+        return int(w), int(h)
+
+    def _fit_monitor(self, sessions, half):
+        mon = next((m for m in self.monitors if m.primary), self.monitors[0] if self.monitors else None)
+        size = self._fit_size(sessions, half)
+        if mon is None or size is None or self.bus is None:
+            return
+        target = (mon.connector, size[0], size[1])
+        if target == self.fit_target:
+            return
+        self.fit_target = target
+        try:
+            if self.fit_saved is None:
+                self.fit_saved = mutter.layout(self.bus)
+            got = mutter.fit_mode(self.bus, mon.connector, size[0], size[1])
+            log.info("fit screen: %s for %dx%d -> %s", mon.connector, size[0], size[1],
+                     f"{got[0]}x{got[1]}" if got else "already the closest mode")
+        except GLib.Error as e:
+            log.warning("fit screen: could not change %s: %s", mon.connector, e.message)
+
+    def _fit_release(self):
+        """Puts back the monitors as they were before Fit screen. Safe to call often."""
+        saved, self.fit_saved, self.fit_target = self.fit_saved, None, None
+        if saved is None or self.bus is None:
+            return
+        try:
+            mutter.apply_layout(self.bus, saved)
+            log.info("fit screen: off; monitors put back")
+        except GLib.Error as e:
+            log.warning("fit screen: could not put the monitors back: %s", e.message)
 
     def _dmabuf_failed(self, why):
         if getattr(self, "using_dmabuf", False) and not self.dmabuf_bad:

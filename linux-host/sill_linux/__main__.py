@@ -118,6 +118,9 @@ def main():
     ap.add_argument("--scroll-speed", type=float, default=1.0)
     ap.add_argument("--trace-input", action="store_true",
                     help="log pointer and scroll events (never keys or text), to debug input")
+    ap.add_argument("--fit", choices=["monitor", "virtual"], default="monitor",
+                    help="Fit screen: switch the real monitor to the closest mode (monitor), or use an exact "
+                         "GNOME virtual screen (virtual; slow on some GPUs)")
     # Off by default: on GNOME 50 with NVIDIA it gave blank frames, and no more of them.
     ap.add_argument("--dmabuf", choices=["auto", "off"], default="off",
                     help="virtual screens: take frames from GNOME on the GPU (auto), or as copies in memory (off)")

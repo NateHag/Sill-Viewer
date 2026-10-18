@@ -104,6 +104,84 @@ def take_over(bus, want):
     return None
 
 
+CONFIG_SIG = "(uua(iiduba(ssa{sv}))a{sv})"
+
+
+def layout(bus):
+    """The current layout, to put back later: [(x, y, scale, transform, primary, [(connector, mode)])]."""
+    r = bus.call_sync(DC_BUS, DC_PATH, DC_BUS, "GetCurrentState", None, None, Gio.DBusCallFlags.NONE, 5000, None)
+    _serial, mons, logical, _props = r.unpack()
+    current = {}
+    for (spec, modes, _p) in mons:
+        m = next((m for m in modes if m[6].get("is-current")), None)
+        if m is not None:
+            current[spec[0]] = m[0]
+    out = []
+    for (x, y, scale, transform, primary, specs, _lp) in logical:
+        members = [(sp[0], current[sp[0]]) for sp in specs if sp[0] in current]
+        if members:
+            out.append((x, y, scale, transform, primary, members))
+    return out
+
+
+def apply_layout(bus, saved):
+    """Puts back a layout from `layout()`. Temporary: GNOME's saved settings are untouched."""
+    r = bus.call_sync(DC_BUS, DC_PATH, DC_BUS, "GetCurrentState", None, None, Gio.DBusCallFlags.NONE, 5000, None)
+    serial = r.unpack()[0]
+    configs = [(x, y, scale, t, primary, [(c, mode, {}) for (c, mode) in members])
+               for (x, y, scale, t, primary, members) in saved]
+    bus.call_sync(DC_BUS, DC_PATH, DC_BUS, "ApplyMonitorsConfig", GLib.Variant(CONFIG_SIG, (serial, 1, configs, {})),
+                  None, Gio.DBusCallFlags.NONE, 5000, None)
+
+
+def fit_mode(bus, connector, want_w, want_h):
+    """Switches `connector` to its mode closest to want_w x want_h pixels: the shape first, then the
+    size; among equal sizes the highest refresh rate (at least 50 Hz when there is one). The other
+    monitors keep their modes, laid out again side by side to its right. Temporary, like
+    apply_layout. Returns (width, height) of the mode, or None when nothing changed."""
+    import math
+    r = bus.call_sync(DC_BUS, DC_PATH, DC_BUS, "GetCurrentState", None, None, Gio.DBusCallFlags.NONE, 5000, None)
+    serial, mons, logical, props = r.unpack()
+    logical_mode = int(props.get("layout-mode", 1)) == 1
+    target = next(((spec, modes) for (spec, modes, _p) in mons if spec[0] == connector), None)
+    if target is None or not target[1]:
+        return None
+    modes = target[1]
+    cur = next((m for m in modes if m[6].get("is-current")), None)
+    fast = [m for m in modes if m[3] >= 49.5] or list(modes)
+    want_aspect = want_w / max(want_h, 1)
+
+    def cost(m):
+        shape = abs(math.log((m[1] / max(m[2], 1)) / want_aspect))
+        size = abs(math.log((m[1] * m[2]) / max(want_w * want_h, 1)))
+        return (round(shape * 20 + size, 2), -m[3])
+    best = min(fast, key=cost)
+    if cur is not None and best[0] == cur[0]:
+        return None
+    # The monitor's place and scale stay; the others keep theirs, moved right so none overlaps.
+    place = {}
+    for (x, y, scale, transform, primary, specs, _lp) in logical:
+        for sp in specs:
+            place[sp[0]] = (x, y, scale, transform, primary)
+    current = {spec[0]: next((m for m in ms if m[6].get("is-current")), None) for (spec, ms, _p) in mons}
+    x0, y0, scale, transform, primary = place.get(connector, (0, 0, 1.0, 0, True))
+    scales = list(best[5]) or [1.0]
+    if scale not in scales:
+        scale = min(scales, key=lambda v: abs(v - scale))
+    width = best[1] / scale if logical_mode else best[1]
+    configs = [(x0, y0, scale, transform, primary, [(connector, best[0], {})])]
+    x = x0 + int(round(width))
+    for c, (lx, ly, ls, lt, lp) in sorted(place.items(), key=lambda kv: kv[1][0]):
+        m = current.get(c)
+        if c == connector or m is None:
+            continue
+        configs.append((x, y0, ls, lt, lp and not primary, [(c, m[0], {})]))
+        x += int(round(m[1] / ls if logical_mode else m[1]))
+    bus.call_sync(DC_BUS, DC_PATH, DC_BUS, "ApplyMonitorsConfig", GLib.Variant(CONFIG_SIG, (serial, 1, configs, {})),
+                  None, Gio.DBusCallFlags.NONE, 5000, None)
+    return best[1], best[2]
+
+
 def watch_monitors(bus, callback):
     return bus.signal_subscribe(None, DC_BUS, "MonitorsChanged", DC_PATH, None, Gio.DBusSignalFlags.NONE,
                                 lambda *a: callback())
