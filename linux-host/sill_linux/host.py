@@ -435,7 +435,11 @@ class Host:
                     cursor=self._cursor_in_video(sessions))
         wid = active.get("window", {}).get("_0") if "window" in active else None
         fit = "desktop" in active and s["virtualDisplay"] and self.mutter and not self.args.test_source
-        if fit and getattr(self.args, "fit", "monitor") == "monitor":
+        if fit and getattr(self.args, "fit", "off") == "off":
+            # Fit screen without touching the monitor: stream it as it is; the viewer scales it.
+            self._fit_release()
+            fit = False
+        elif fit and getattr(self.args, "fit", "off") == "monitor":
             # Fit screen and Match this screen on the real monitor: it switches to its mode
             # closest to the viewer's size, and streams through the normal (fast) path. A GNOME
             # virtual screen is exact, but on some GPUs (NVIDIA, GNOME 50) it draws only a few

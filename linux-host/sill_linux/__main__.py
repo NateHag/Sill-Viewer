@@ -118,9 +118,12 @@ def main():
     ap.add_argument("--scroll-speed", type=float, default=1.0)
     ap.add_argument("--trace-input", action="store_true",
                     help="log pointer and scroll events (never keys or text), to debug input")
-    ap.add_argument("--fit", choices=["monitor", "virtual"], default="monitor",
-                    help="Fit screen: switch the real monitor to the closest mode (monitor), or use an exact "
-                         "GNOME virtual screen (virtual; slow on some GPUs)")
+    # Off by default: switching the real monitor's mode once left a PC with no picture at all (not
+    # on the monitor, not through a KVM), and with the host down nothing could switch it back.
+    ap.add_argument("--fit", choices=["off", "monitor", "virtual"], default="off",
+                    help="Fit screen: leave the monitor as it is and let the viewer scale (off, the default), "
+                         "switch the real monitor to the closest mode (monitor), or use an exact GNOME virtual "
+                         "screen (virtual; slow on some GPUs)")
     # Off by default: on GNOME 50 with NVIDIA it gave blank frames, and no more of them.
     ap.add_argument("--dmabuf", choices=["auto", "off"], default="off",
                     help="virtual screens: take frames from GNOME on the GPU (auto), or as copies in memory (off)")
