@@ -24,7 +24,7 @@ class Clock:
         return self.t
 
 
-def make(live=("4248",), settings=None, answer=True, restarts=(), dry_run=False):
+def make(live=("4248",), settings=None, answer=True, restarts=(), dry_run=False, seat=1000):
     clock = Clock()
     acted, asked = [], []
     st = {"enabled": True} if settings is None else settings
@@ -34,7 +34,7 @@ def make(live=("4248",), settings=None, answer=True, restarts=(), dry_run=False)
         return answer() if callable(answer) else answer
 
     dog = wd.Watchdog(lambda: acted.append(clock.t), clock=clock, is_live=lambda pid: pid in live,
-                      owner=lambda pid: 1000, settings=lambda uid: st, ask=ask,
+                      owner=lambda pid: 1000, seat_user=lambda: seat, settings=lambda uid: st, ask=ask,
                       restarts=[clock.t - r for r in restarts], dry_run=dry_run)
     dog.st = st
     return dog, clock, acted, asked
@@ -98,6 +98,22 @@ class OnOffAndPause(unittest.TestCase):
         dog, clock, acted, asked = make(settings={})
         feed(dog, clock, 30)
         self.assertEqual((acted, asked), ([], []))
+
+    def test_a_gnome_shell_of_someone_not_on_the_monitor_does_nothing(self):
+        dog, clock, acted, asked = make(seat=1001)
+        feed(dog, clock, 30)
+        self.assertEqual((acted, asked), ([], []))
+
+    def test_nobody_on_the_monitor_does_nothing(self):
+        dog, clock, acted, _ = make(seat=None)
+        feed(dog, clock, 30)
+        self.assertEqual(acted, [])
+
+    def test_a_bad_pause_value_means_not_paused_and_does_not_crash(self):
+        for bad in ("soon", [1], {"a": 1}, "nan"):
+            dog, clock, acted, _ = make(settings={"enabled": True, "pausedUntil": bad})
+            feed(dog, clock, 3)
+            self.assertEqual(len(acted), 1, bad)
 
     def test_turned_off(self):
         dog, clock, acted, _ = make(settings={"enabled": False})

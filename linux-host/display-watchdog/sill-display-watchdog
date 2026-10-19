@@ -11,6 +11,8 @@ OFF until the desktop's user turns it on: the Sill icon's "Fix a stuck black scr
 reads for the user whose gnome-shell is stuck.
 
 It touches nothing else. It acts only when ALL of these hold:
+  - the stuck gnome-shell belongs to the user of the active desktop on seat0 (the monitor), so
+    nobody can start a gnome-shell of their own and get someone else's desktop restarted,
   - that user turned it on, and did not pause it,
   - the message comes from a gnome-shell process that is still running (journald's own _EXE,
     and the process's real binary),
@@ -63,6 +65,31 @@ def owner(pid):
         return None
 
 
+def seat_user():
+    """The uid of the active graphical session on seat0 (the monitor and keyboard), or None."""
+    def prop(*args):
+        r = subprocess.run(["loginctl", *args], capture_output=True, text=True, timeout=10)
+        return r.stdout.strip() if r.returncode == 0 else ""
+    try:
+        sid = prop("show-seat", "seat0", "--property=ActiveSession", "--value")
+        if not sid:
+            return None
+        typ = prop("show-session", sid, "--property=Type", "--value")
+        uid = prop("show-session", sid, "--property=User", "--value")
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return int(uid) if typ in ("wayland", "x11") and uid.isdigit() else None
+
+
+def paused_until(s):
+    """A bad value in the user's file means not paused; it must never stop the watchdog."""
+    try:
+        t = float(s.get("pausedUntil") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    return t if t == t else 0.0  # NaN
+
+
 def read_settings(uid):
     """The user's own on/pause choice. Root reads it, so: no symlinks, owned by that user, small."""
     try:
@@ -113,12 +140,13 @@ def restart_gdm():
 
 
 class Watchdog:
-    def __init__(self, act, clock=time.time, is_live=is_live_gnome_shell, owner=owner,
+    def __init__(self, act, clock=time.time, is_live=is_live_gnome_shell, owner=owner, seat_user=seat_user,
                  settings=read_settings, ask=ask, restarts=(), dry_run=False):
         self.act = act
         self.clock = clock
         self.is_live = is_live
         self.owner = owner
+        self.seat_user = seat_user
         self.settings = settings
         self.ask = ask
         self.restarts = list(restarts)
@@ -154,11 +182,15 @@ class Watchdog:
             return False
 
         uid = self.owner(pid)
-        s = self.settings(uid) if uid is not None else {}
+        if uid is None or uid != self.seat_user():
+            self.say_once(pid, "not-seat", f"gnome-shell {pid} looks stuck, but it is not the desktop on the "
+                                           "monitor; doing nothing")
+            return False
+        s = self.settings(uid)
         if not s.get("enabled"):
             self.say_once(pid, "off", f"gnome-shell {pid} looks stuck; the fix is off for this user, so doing nothing")
             return False
-        if float(s.get("pausedUntil") or 0) > now:
+        if paused_until(s) > now:
             self.say_once(pid, "paused", f"gnome-shell {pid} looks stuck; the fix is paused, so doing nothing")
             return False
         self.restarts = [t for t in self.restarts if now - t < GIVE_UP_WINDOW_S]
@@ -184,7 +216,7 @@ class Watchdog:
             log(f"gnome-shell {pid} is gone (logged out?); nothing to restart")
             return False
         s = self.settings(uid)
-        if not s.get("enabled") or float(s.get("pausedUntil") or 0) > self.clock():
+        if not s.get("enabled") or paused_until(s) > self.clock() or uid != self.seat_user():
             log("the fix was turned off or paused during the warning; doing nothing")
             return False
         log("restarting GDM")
@@ -232,8 +264,8 @@ def main():
             continue
         try:
             dog.feed(entry)
-        except subprocess.CalledProcessError as e:
-            log(f"restarting GDM failed: {e}")
+        except Exception as e:  # one bad entry or file must not stop the watchdog
+            log(f"error: {e!r}")
     sys.exit(proc.wait() or 1)
 
 
