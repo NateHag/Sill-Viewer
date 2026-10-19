@@ -99,6 +99,8 @@ if [ $force = 1 ] || ! diff -rq -x __pycache__ "$new/sill_linux" "$APP/sill_linu
     rm -rf "$APP/sill_linux"
     mv "$APP/sill_linux.new" "$APP/sill_linux"
     systemctl --user restart sill-linux 2>/dev/null || true
+    # The tray icon runs the same code, so its menu changes too. Only when it runs: never start it.
+    systemctl --user try-restart sill-linux-tray 2>/dev/null || true
     echo "host updated to ${sha:0:7} and restarted"
 else
     echo "GitHub moved to ${sha:0:7}; the host's code is the same, so it keeps running"
