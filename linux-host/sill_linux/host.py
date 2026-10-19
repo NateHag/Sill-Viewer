@@ -545,7 +545,7 @@ class Host:
         if gl:
             forced = self.args.encoder or ""
             nv = forced.startswith("nv") or (not forced and video.have("nvh265enc")
-                                            and ("nvh265enc", spec.fps) not in video._bad_encoders)
+                                            and not video.is_bad("nvh265enc", spec.fps))
             # NVIDIA's encoder takes GL memory directly (CUDA-GL interop); others need it back in memory.
             tail = " ! glupload ! glcolorconvert ! video/x-raw(memory:GLMemory),format=RGBA"
             if not nv:

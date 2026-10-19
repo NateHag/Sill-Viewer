@@ -17,8 +17,25 @@ from gi.repository import GLib, Gst, GstVideo  # noqa: E402
 log = logging.getLogger("sill.video")
 
 ENCODERS = ["nvcudah265enc", "nvh265enc", "nvautogpuh265enc", "vah265enc", "vaapih265enc", "x265enc"]
-# (encoder, fps) pairs that failed: an encoder that cannot do 120 fps may still do 60.
-_bad_encoders = set()
+# (encoder, fps) -> when it failed: an encoder that cannot do 120 fps may still do 60.
+# Only for a while: a failure can come from the source (a monitor that is changing its mode,
+# a PipeWire stream that is not ready), not the encoder, and must not block it for good.
+_bad_encoders = {}
+BAD_FOR = 120.0
+
+
+def mark_bad(enc, fps):
+    _bad_encoders[(enc, fps)] = time.monotonic()
+
+
+def is_bad(enc, fps):
+    t = _bad_encoders.get((enc, fps))
+    if t is None:
+        return False
+    if time.monotonic() - t > BAD_FOR:
+        del _bad_encoders[(enc, fps)]
+        return False
+    return True
 
 NAL_VPS, NAL_SPS, NAL_PPS, NAL_AUD = 32, 33, 34, 35
 
@@ -144,7 +161,14 @@ class Pipeline:
     def candidates(self):
         if self.forced_encoder:
             return [self.forced_encoder]
-        found = [e for e in ENCODERS if (e, self.fps) not in _bad_encoders and have(e)]
+        installed = [e for e in ENCODERS if have(e)]
+        found = [e for e in installed if not is_bad(e, self.fps)]
+        if installed and not found:
+            # Every encoder failed lately: the fault is most likely not theirs. Try them all again.
+            log.warning("every encoder failed lately; trying them all again")
+            for e in installed:
+                _bad_encoders.pop((e, self.fps), None)
+            found = installed
         return found[:1] if self.gpu_source else found
 
     def start(self):
@@ -180,11 +204,11 @@ class Pipeline:
                 errors.append(f"{enc}: could not start")
                 self._teardown()
                 if not self.gpu_source:
-                    _bad_encoders.add((enc, self.fps))
+                    mark_bad(enc, self.fps)
                 continue
             log.info("encoding with %s at %d kbps, %d fps", enc, kbps, self.fps)
             return True
-        raise RuntimeError("no HEVC encoder works: " + "; ".join(errors or ["none installed"]))
+        raise RuntimeError("no HEVC encoder works: " + "; ".join(errors or ["none installed (gst-inspect-1.0 | grep 265enc)"]))
 
     def _count_captured(self, _pad, _info):
         self.captured += 1
@@ -213,7 +237,7 @@ class Pipeline:
             if self.frames == 0 and self.encoder and not self.forced_encoder and encoder_side and not self.gpu_source:
                 if time.monotonic() - self.started < 10:
                     log.warning("encoder %s failed before its first frame; trying the next one", self.encoder)
-                    _bad_encoders.add((self.encoder, self.fps))
+                    mark_bad(self.encoder, self.fps)
             self._teardown()
             self.on_failed(err.message)
         elif msg.type == Gst.MessageType.EOS:
