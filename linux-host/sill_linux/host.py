@@ -124,6 +124,14 @@ class Host:
             if not self.mutter:
                 raise SystemExit("GNOME's remote desktop API (org.gnome.Mutter.RemoteDesktop) is not on the session "
                                  "bus. Run this inside your GNOME session, or use --test-source.")
+            # A Fit screen from an earlier run can leave a monitor in a mode it shows nothing in.
+            # No viewer is connected yet, so put every monitor back to its own best mode.
+            try:
+                if mutter.reset_to_preferred(self.bus):
+                    log.info("monitors put back to their native modes")
+            except GLib.Error as e:
+                log.warning("could not put the monitors back to their native modes: %s", e.message)
+            mutter.wake_screen(self.bus)
             self.monitors = mutter.monitors(self.bus)
             mutter.watch_monitors(self.bus, self._monitors_changed)
             log.info("monitors: %s", self.monitors)
@@ -486,6 +494,14 @@ class Host:
             return
         self._stop_stream()
         self.running = spec
+        if self.bus is not None:
+            if not hasattr(self, "idle_hold"):
+                self.idle_hold = mutter.IdleInhibit(self.bus)
+            if spec is not None and spec.kind == "mutter":
+                mutter.wake_screen(self.bus)
+                self.idle_hold.on()
+            else:
+                self.idle_hold.off()
         if spec is None:
             log.info("nothing to stream")
             self.broadcast_settings()
@@ -692,6 +708,8 @@ class Host:
                     self.fail_count = 0
             elif time.monotonic() - t > 8:
                 log.warning("no frames for 8 s; restarting the stream")
+                if self.bus is not None:
+                    mutter.wake_screen(self.bus)
                 if p.frames == 0:
                     self._dmabuf_failed("no frame in 8 s")
                 self._stop_stream()

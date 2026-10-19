@@ -33,6 +33,57 @@ def session_bus():
     return Gio.bus_get_sync(Gio.BusType.SESSION, None)
 
 
+def wake_screen(bus):
+    """Turn the monitors on if GNOME has blanked them. A blanked GNOME paints nothing, so a
+    screen cast of it sends no frames at all and the viewer waits for the picture forever."""
+    props = "org.freedesktop.DBus.Properties"
+    try:
+        r = bus.call_sync(DC_BUS, DC_PATH, props, "Get", GLib.Variant("(ss)", (DC_BUS, "PowerSaveMode")),
+                          GLib.VariantType("(v)"), Gio.DBusCallFlags.NONE, 3000, None)
+        mode = r.unpack()[0]
+        if mode not in (0, -1):   # 0 = on, -1 = unknown
+            log.info("the screen is blanked (power save mode %s); turning it on", mode)
+            bus.call_sync(DC_BUS, DC_PATH, props, "Set",
+                          GLib.Variant("(ssv)", (DC_BUS, "PowerSaveMode", GLib.Variant("i", 0))),
+                          None, Gio.DBusCallFlags.NONE, 3000, None)
+        return mode
+    except GLib.Error as e:
+        log.warning("could not wake the screen: %s", e.message)
+        return None
+
+
+class IdleInhibit:
+    """Keeps GNOME from blanking the screen (and so stopping the frames) while a viewer is connected."""
+    SM = ("org.gnome.SessionManager", "/org/gnome/SessionManager", "org.gnome.SessionManager")
+    IDLE = 8
+
+    def __init__(self, bus):
+        self.bus = bus
+        self.cookie = None
+
+    def on(self):
+        if self.cookie is not None:
+            return
+        try:
+            r = self.bus.call_sync(*self.SM, "Inhibit",
+                                   GLib.Variant("(susu)", ("sill-linux", 0, "A Sill viewer is connected", self.IDLE)),
+                                   GLib.VariantType("(u)"), Gio.DBusCallFlags.NONE, 3000, None)
+            self.cookie = r.unpack()[0]
+            log.info("screen blanking held off while a viewer is connected")
+        except GLib.Error as e:
+            log.warning("could not hold off screen blanking: %s", e.message)
+
+    def off(self):
+        if self.cookie is None:
+            return
+        cookie, self.cookie = self.cookie, None
+        try:
+            self.bus.call_sync(*self.SM, "Uninhibit", GLib.Variant("(u)", (cookie,)),
+                               None, Gio.DBusCallFlags.NONE, 3000, None)
+        except GLib.Error as e:
+            log.warning("could not release the blanking hold: %s", e.message)
+
+
 def available(bus):
     try:
         r = bus.call_sync("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "NameHasOwner",
@@ -132,6 +183,48 @@ def apply_layout(bus, saved):
                for (x, y, scale, t, primary, members) in saved]
     bus.call_sync(DC_BUS, DC_PATH, DC_BUS, "ApplyMonitorsConfig", GLib.Variant(CONFIG_SIG, (serial, 1, configs, {})),
                   None, Gio.DBusCallFlags.NONE, 5000, None)
+
+
+def reset_to_preferred(bus):
+    """Puts every monitor in its preferred (native) mode, laid out left to right in its current
+    order. Temporary, like apply_layout. Returns True when something changed."""
+    r = bus.call_sync(DC_BUS, DC_PATH, DC_BUS, "GetCurrentState", None, None, Gio.DBusCallFlags.NONE, 5000, None)
+    serial, mons, logical, props = r.unpack()
+    logical_mode = int(props.get("layout-mode", 1)) == 1
+    modes = {spec[0]: ms for (spec, ms, _p) in mons}
+    changed = False
+    configs = []
+    x = None
+    y0 = 0
+    for (lx, ly, scale, transform, primary, specs, _lp) in sorted(logical, key=lambda l: (l[0], l[1])):
+        members = []
+        width = 0
+        for sp in specs:
+            c = sp[0]
+            ms = modes.get(c) or []
+            cur = next((m for m in ms if m[6].get("is-current")), None)
+            pref = next((m for m in ms if m[6].get("is-preferred")), None) or cur
+            if pref is None:
+                continue
+            if cur is None or pref[0] != cur[0]:
+                changed = True
+            scales = list(pref[5]) or [1.0]
+            if scale not in scales:
+                scale = min(scales, key=lambda v: abs(v - scale))
+            w = pref[2] if transform % 2 == 1 else pref[1]
+            width = max(width, int(round(w / scale)) if logical_mode else w)
+            members.append((c, pref[0], {}))
+        if not members:
+            continue
+        if x is None:
+            x, y0 = lx, ly
+        configs.append((x, y0, scale, transform, primary, members))
+        x += width
+    if not changed or not configs:
+        return False
+    bus.call_sync(DC_BUS, DC_PATH, DC_BUS, "ApplyMonitorsConfig", GLib.Variant(CONFIG_SIG, (serial, 1, configs, {})),
+                  None, Gio.DBusCallFlags.NONE, 5000, None)
+    return True
 
 
 def fit_mode(bus, connector, want_w, want_h):
