@@ -1,0 +1,273 @@
+#!/usr/bin/python3
+"""Restarts GDM when GNOME's desktop is stuck and can no longer draw to the monitor.
+
+The stuck state: after a virtual screen (Sill's old Fit screen) on an NVIDIA card, gnome-shell
+logs "Failed to lock front buffer" about once a minute, forever, and the monitor stays black.
+Only a new gnome-shell fixes it, which means restarting GDM (it logs back in by itself when
+auto-login is on).
+
+OFF until the desktop's user turns it on: the Sill icon's "Fix a stuck black screen" item, or
+`sill-linux watchdog on`. That writes ~/.config/sill-linux/display-watchdog.json, which this
+reads for the user whose gnome-shell is stuck.
+
+It touches nothing else. It acts only when ALL of these hold:
+  - the stuck gnome-shell belongs to the user of the active desktop on seat0 (the monitor), so
+    nobody can start a gnome-shell of their own and get someone else's desktop restarted,
+  - that user turned it on, and did not pause it,
+  - the message comes from a gnome-shell process that is still running (journald's own _EXE,
+    and the process's real binary),
+  - that same process logged it at 3 moments at least 45 s apart, within 10 minutes (so a
+    one-second burst, which GNOME can recover from by itself, never counts),
+  - it has not restarted GDM in the last hour, and not twice in the last 24 hours (if two
+    restarts did not hold, something keeps causing it and a person has to look),
+  - nobody clicked "Don't restart" on the 2-minute warning it shows first.
+Services that keep running without a desktop login (lingering user services, system services)
+are not affected by a GDM restart.
+
+  sill-display-watchdog            watch the journal and act (run as root by its service)
+  sill-display-watchdog --dry-run  watch and say what it would do, without doing it
+Log: journalctl -u sill-display-watchdog
+"""
+import collections
+import json
+import os
+import pwd
+import stat
+import subprocess
+import sys
+import time
+
+MESSAGE = "Failed to lock front buffer"
+GNOME_SHELL = "/usr/bin/gnome-shell"
+HITS = 3
+SPACING_S = 45
+WINDOW_S = 600
+COOLDOWN_S = 3600
+GIVE_UP_AFTER = 2
+GIVE_UP_WINDOW_S = 24 * 3600
+WARN_S = 120
+STATE = "/var/lib/sill-display-watchdog/restarts.json"
+SETTINGS = ".config/sill-linux/display-watchdog.json"
+
+
+def is_live_gnome_shell(pid):
+    # The real binary, not the process name: any program can call itself "gnome-shell".
+    try:
+        return os.readlink(f"/proc/{pid}/exe") == GNOME_SHELL
+    except OSError:
+        return False
+
+
+def owner(pid):
+    try:
+        return os.stat(f"/proc/{pid}").st_uid
+    except OSError:
+        return None
+
+
+def seat_user():
+    """The uid of the active graphical session on seat0 (the monitor and keyboard), or None."""
+    def prop(*args):
+        r = subprocess.run(["loginctl", *args], capture_output=True, text=True, timeout=10)
+        return r.stdout.strip() if r.returncode == 0 else ""
+    try:
+        sid = prop("show-seat", "seat0", "--property=ActiveSession", "--value")
+        if not sid:
+            return None
+        typ = prop("show-session", sid, "--property=Type", "--value")
+        uid = prop("show-session", sid, "--property=User", "--value")
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return int(uid) if typ in ("wayland", "x11") and uid.isdigit() else None
+
+
+def paused_until(s):
+    """A bad value in the user's file means not paused; it must never stop the watchdog."""
+    try:
+        t = float(s.get("pausedUntil") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    return t if t == t else 0.0  # NaN
+
+
+def read_settings(uid):
+    """The user's own on/pause choice. Root reads it, so: no symlinks, owned by that user, small."""
+    try:
+        home = pwd.getpwuid(uid).pw_dir
+        fd = os.open(os.path.join(home, SETTINGS), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except (KeyError, OSError):
+        return {}
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_uid != uid or st.st_size > 4096:
+            return {}
+        data = json.loads(os.read(fd, 4096))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+    finally:
+        os.close(fd)
+
+
+def as_user(uid, cmd, **kw):
+    """Runs cmd in the user's desktop session (their D-Bus), as that user."""
+    env = {"DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{uid}/bus", "XDG_RUNTIME_DIR": f"/run/user/{uid}",
+           "PATH": "/usr/bin:/bin"}
+    return subprocess.run(["setpriv", f"--reuid={uid}", f"--regid={pwd.getpwuid(uid).pw_gid}", "--init-groups",
+                           "--", *cmd], env=env, capture_output=True, text=True, **kw)
+
+
+def ask(uid):
+    """Shows a 2-minute warning with a "Don't restart" button. True = go ahead.
+
+    On a stuck desktop nobody can see or click it, so it goes ahead. Moving the mouse does not
+    cancel: someone at a black screen would wiggle it and cancel the fix they need.
+    """
+    cmd = ["notify-send", "--app-name=Sill", "--urgency=critical", "--wait", "--action=cancel=Don't restart",
+           "The screen looks stuck",
+           "The desktop will restart in 2 minutes to fix a black screen. Open windows will close."]
+    try:
+        r = as_user(uid, cmd, timeout=WARN_S)
+    except subprocess.TimeoutExpired:
+        return True
+    except (OSError, KeyError):
+        return True
+    return r.stdout.strip() != "cancel"
+
+
+def restart_gdm():
+    subprocess.run(["systemctl", "restart", "gdm"], check=True)
+
+
+class Watchdog:
+    def __init__(self, act, clock=time.time, is_live=is_live_gnome_shell, owner=owner, seat_user=seat_user,
+                 settings=read_settings, ask=ask, restarts=(), dry_run=False):
+        self.act = act
+        self.clock = clock
+        self.is_live = is_live
+        self.owner = owner
+        self.seat_user = seat_user
+        self.settings = settings
+        self.ask = ask
+        self.restarts = list(restarts)
+        self.dry_run = dry_run
+        self.hits = collections.defaultdict(collections.deque)
+        self.declined = set()
+        self.said = {}
+
+    def say_once(self, pid, why, msg):
+        """One log line per stuck process and reason, not one a minute."""
+        if self.said.get(pid) != why:
+            self.said[pid] = why
+            log(msg)
+
+    def feed(self, entry):
+        """Takes one journal entry (a dict). Returns True when it restarted GDM."""
+        if MESSAGE not in str(entry.get("MESSAGE", "")):
+            return False
+        # _EXE is set by journald itself; SYSLOG_IDENTIFIER is whatever the sender claims.
+        if entry.get("_EXE") != GNOME_SHELL:
+            return False
+        pid = str(entry.get("_PID", ""))
+        if not pid.isdigit() or not self.is_live(pid) or pid in self.declined:
+            return False
+        now = self.clock()
+        q = self.hits[pid]
+        if q and now - q[-1] < SPACING_S:
+            return False
+        q.append(now)
+        while q and now - q[0] > WINDOW_S:
+            q.popleft()
+        if len(q) < HITS:
+            return False
+
+        uid = self.owner(pid)
+        if uid is None or uid != self.seat_user():
+            self.say_once(pid, "not-seat", f"gnome-shell {pid} looks stuck, but it is not the desktop on the "
+                                           "monitor; doing nothing")
+            return False
+        s = self.settings(uid)
+        if not s.get("enabled"):
+            self.say_once(pid, "off", f"gnome-shell {pid} looks stuck; the fix is off for this user, so doing nothing")
+            return False
+        if paused_until(s) > now:
+            self.say_once(pid, "paused", f"gnome-shell {pid} looks stuck; the fix is paused, so doing nothing")
+            return False
+        self.restarts = [t for t in self.restarts if now - t < GIVE_UP_WINDOW_S]
+        if self.restarts and now - self.restarts[-1] < COOLDOWN_S:
+            self.say_once(pid, "cooldown", f"gnome-shell {pid} looks stuck, but GDM was restarted "
+                                           f"{int(now - self.restarts[-1]) // 60} min ago; waiting")
+            return False
+        if len(self.restarts) >= GIVE_UP_AFTER:
+            self.say_once(pid, "gave-up", f"gnome-shell {pid} looks stuck again after {len(self.restarts)} restarts "
+                                          "in 24 hours; not restarting again, something keeps causing this")
+            return False
+        if self.dry_run:
+            self.say_once(pid, "dry", f"gnome-shell {pid} looks stuck; would warn, then restart GDM (dry run)")
+            return False
+
+        log(f"gnome-shell {pid} looks stuck ({len(q)} front-buffer failures in {WINDOW_S // 60} min); "
+            f"warning for {WARN_S // 60} min, then restarting GDM")
+        if not self.ask(uid):
+            log(f"someone clicked Don't restart; leaving gnome-shell {pid} alone")
+            self.declined.add(pid)
+            return False
+        if not self.is_live(pid):
+            log(f"gnome-shell {pid} is gone (logged out?); nothing to restart")
+            return False
+        s = self.settings(uid)
+        if not s.get("enabled") or paused_until(s) > self.clock() or uid != self.seat_user():
+            log("the fix was turned off or paused during the warning; doing nothing")
+            return False
+        log("restarting GDM")
+        self.act()
+        self.restarts.append(self.clock())
+        self.hits.clear()
+        return True
+
+
+def log(msg):
+    print(msg, flush=True)
+
+
+def read_restarts():
+    try:
+        with open(STATE) as f:
+            return [float(t) for t in json.load(f)]
+    except (OSError, ValueError, TypeError):
+        return []
+
+
+def write_restarts(ts):
+    os.makedirs(os.path.dirname(STATE), exist_ok=True)
+    with open(STATE, "w") as f:
+        json.dump(ts, f)
+
+
+def main():
+    dry_run = "--dry-run" in sys.argv[1:]
+    dog = None
+
+    def act():
+        restart_gdm()
+        write_restarts(dog.restarts + [time.time()])
+
+    dog = Watchdog(act, restarts=read_restarts(), dry_run=dry_run)
+    log(f"watching for a stuck GNOME desktop{' (dry run)' if dry_run else ''}")
+    proc = subprocess.Popen(
+        ["journalctl", "--follow", "--lines=0", "--output=json", f"_EXE={GNOME_SHELL}"],
+        stdout=subprocess.PIPE, text=True)
+    for line in proc.stdout:
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        try:
+            dog.feed(entry)
+        except Exception as e:  # one bad entry or file must not stop the watchdog
+            log(f"error: {e!r}")
+    sys.exit(proc.wait() or 1)
+
+
+if __name__ == "__main__":
+    main()

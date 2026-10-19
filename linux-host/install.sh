@@ -69,6 +69,9 @@ echo "Sill shows when an update is available. You choose when to install it."
 read -r -p "Install updates by themselves instead, every hour? [y/N] " a </dev/tty || a=n
 case "$a" in [yY]*) ./update.sh --install ;; *) ./update.sh --setup ;; esac
 
+echo "==> Display watchdog (restarts GDM if the desktop gets stuck on a black screen)"
+display-watchdog/install.sh
+
 echo
 echo "Done. On your iPad, open Sill. Tap this computer. Then type the code from the notification."
 echo "Log:  journalctl --user -u sill-linux -f"

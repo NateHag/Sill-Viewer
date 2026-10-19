@@ -13,6 +13,8 @@ tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 d="$tmp/sill-linux-host"
 mkdir -p "$d"
 cp -r linux-host/sill_linux linux-host/README.md linux-host/update.sh linux-host/install.sh "$d/"
+mkdir -p "$d/display-watchdog"
+cp linux-host/display-watchdog/sill-display-watchdog linux-host/display-watchdog/install.sh "$d/display-watchdog/"
 find "$d" -name __pycache__ -prune -exec rm -rf {} +
 echo "$build" > "$d/sill_linux/BUILD"
 (cd "$tmp" && tar czf sill-linux-host.tar.gz --owner=0 --group=0 sill-linux-host)

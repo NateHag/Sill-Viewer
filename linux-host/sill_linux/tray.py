@@ -19,6 +19,7 @@ except (ValueError, ImportError):
     from gi.repository import AppIndicator3 as AppIndicator
 from gi.repository import GLib, Gtk  # noqa: E402
 
+from . import watchdog  # noqa: E402
 from .host import control_path  # noqa: E402
 
 PRESETS = [(4_000_000, "Low"), (8_000_000, "Efficient"), (15_000_000, "Balanced"), (25_000_000, "High"),
@@ -64,7 +65,7 @@ class Tray:
     # --- state -----------------------------------------------------------------------------------
     def refresh(self):
         self.status = control("status")
-        key = json.dumps(self._digest(self.status), sort_keys=True)
+        key = json.dumps([self._digest(self.status), watchdog.installed(), watchdog.load()], sort_keys=True)
         if key != self.shown:
             self.shown = key
             self.build()
@@ -160,6 +161,7 @@ class Tray:
             vd.connect("toggled", lambda w: self.set(virtualDisplay=w.get_active()))
             menu.append(vd)
         menu.append(Gtk.SeparatorMenuItem())
+        self.watchdog_items(menu)
 
         self.item(menu, "Pair iPhone or iPad…", lambda: self.act("pair"))
         devices = st.get("devices", [])
@@ -182,6 +184,23 @@ class Tray:
         self.item(menu, "Stop Sill", self.stop)
         menu.show_all()
         self.ind.set_menu(menu)
+
+    def watchdog_items(self, menu):
+        """The display watchdog's switch: off unless this user turns it on."""
+        if not watchdog.installed():
+            return
+        on = Gtk.CheckMenuItem(label="Fix a stuck black screen (restarts the desktop)")
+        on.set_active(watchdog.enabled())
+        on.connect("toggled", lambda w: (watchdog.save(enabled=w.get_active()), self.refresh()))
+        menu.append(on)
+        if watchdog.enabled():
+            p = watchdog.paused_until()
+            if p:
+                self.item(menu, f"    Paused until {GLib.DateTime.new_from_unix_local(int(p)).format('%H:%M')} · Resume",
+                          lambda: (watchdog.resume(), self.refresh()))
+            else:
+                self.item(menu, "    Pause it for 4 hours", lambda: (watchdog.pause(), self.refresh()))
+        menu.append(Gtk.SeparatorMenuItem())
 
     # --- actions -------------------------------------------------------------------------------------
     def act(self, op, **kw):
