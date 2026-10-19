@@ -84,6 +84,11 @@ xcrun vtool -set-build-version macos "${minos:?vtool reported no deployment targ
 cp Packaging/Info.plist "$stage/Contents/Info.plist"
 build_number="$(git rev-list --count HEAD 2>/dev/null || echo 1)"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $build_number" "$stage/Contents/Info.plist"
+# This fork's version for update-mac.sh and Sill Viewer: the newest commit that changed mac-host/
+# ("dev" with changes not committed).
+sill_build="$(git log -1 --format=%H -- . 2>/dev/null)"
+[ -n "$(git status --porcelain -- . 2>/dev/null)" ] && sill_build=dev
+/usr/libexec/PlistBuddy -c "Add :SillBuild string ${sill_build:-dev}" "$stage/Contents/Info.plist"
 printf 'APPL????' > "$stage/Contents/PkgInfo"
 
 # The icon. design/AppIcon.svg is the iOS art, a full-bleed square. macOS 26+ masks and lights a

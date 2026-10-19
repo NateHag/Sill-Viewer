@@ -19,6 +19,7 @@ mod session;
 mod single;
 mod tls;
 mod tray;
+mod updates;
 #[cfg(windows)]
 mod win;
 mod wire;

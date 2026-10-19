@@ -3,7 +3,32 @@
 use std::path::PathBuf;
 use std::process::Command;
 
+/// The version stamp: the newest commit that changed viewer/ (SILL_BUILD overrides it), or "dev"
+/// when this folder has changes that are not committed. And the repository's folder (SILL_REPO),
+/// where the Mac updater is.
+fn stamp() {
+    println!("cargo:rerun-if-env-changed=SILL_BUILD");
+    let git = |args: &[&str]| -> Option<String> {
+        let o = Command::new("git").args(args).output().ok()?;
+        o.status.success().then(|| String::from_utf8_lossy(&o.stdout).trim().to_string())
+    };
+    if let Some(dir) = git(&["rev-parse", "--absolute-git-dir"]) {
+        println!("cargo:rerun-if-changed={dir}/HEAD");
+        println!("cargo:rerun-if-changed={dir}/logs/HEAD");
+        println!("cargo:rerun-if-changed={dir}/index");
+    }
+    let build = std::env::var("SILL_BUILD").ok().filter(|s| !s.is_empty()).or_else(|| {
+        let clean = git(&["status", "--porcelain", "--", "."]).is_some_and(|s| s.is_empty());
+        let sha = git(&["log", "-1", "--format=%H", "--", "."])?;
+        (clean && sha.len() == 40).then_some(sha)
+    }).unwrap_or_else(|| "dev".into());
+    println!("cargo:rustc-env=SILL_BUILD={build}");
+    let repo = git(&["rev-parse", "--show-toplevel"]).unwrap_or_default();
+    println!("cargo:rustc-env=SILL_REPO={repo}");
+}
+
 fn main() {
+    stamp();
     println!("cargo:rerun-if-changed=windows/app.rc");
     println!("cargo:rerun-if-changed=windows/app.ico");
     println!("cargo:rerun-if-changed=windows/app.manifest");

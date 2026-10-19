@@ -32,6 +32,11 @@ if ! command -v cargo >/dev/null; then
 fi
 
 export PKG_CONFIG_PATH="$(brew --prefix ffmpeg)/lib/pkgconfig:$PKG_CONFIG_PATH"
+# The version: the newest commit that changed this folder ("dev" with changes not committed).
+# build.rs puts the same into the program; update-mac.sh compares it with GitHub's newest.
+SILL_BUILD="$(git log -1 --format=%H -- . 2>/dev/null)"
+[ -n "$(git status --porcelain -- . 2>/dev/null)" ] && SILL_BUILD=dev
+export SILL_BUILD="${SILL_BUILD:-dev}"
 cargo build --release
 
 VERSION=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
@@ -52,6 +57,7 @@ cat > "$APP/Contents/Info.plist" <<EOF
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$VERSION</string>
   <key>CFBundleVersion</key><string>$VERSION</string>
+  <key>SillBuild</key><string>$SILL_BUILD</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
   <key>LSMinimumSystemVersion</key><string>12.0</string>
   <key>NSHighResolutionCapable</key><true/>

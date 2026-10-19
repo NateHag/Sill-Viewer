@@ -7,6 +7,7 @@ use crate::input;
 use crate::pairing;
 use crate::render::{self, VideoCallback};
 use crate::tray::{self, Tray};
+use crate::updates;
 use crate::session::{Event, Session};
 use crate::wire;
 use eframe::egui::{self, Color32, Modifiers, Pos2, Rect, RichText, Vec2};
@@ -68,6 +69,11 @@ struct Live {
     pan: (f32, f32),
     /// The host takes and sends files (sill-linux says so in its window list; Sill on a Mac does not).
     files_ok: bool,
+    /// The host's version, and whether it has an update and can install it when asked
+    /// (sill-linux and Sill Desktop Host say so in the window list; Sill on a Mac does not).
+    host_build: Option<String>,
+    host_update: bool,
+    host_can_update: bool,
     settings: Option<Value>,
     rtt: f64,
     sent_viewport: (f32, f32, u32, u32, u32, u32),
@@ -104,6 +110,9 @@ pub struct App {
     quitting: bool,
     /// The paired computer whose Forget was clicked once (the second click confirms).
     forget_confirm: Option<String>,
+    updates: updates::Checker,
+    /// What the Update button said last.
+    update_note: Option<String>,
 }
 
 impl App {
@@ -133,11 +142,13 @@ impl App {
             browser: Browser::start(wake.clone()),
             screen: Screen::Home { status: String::new() },
             tasks: channel(),
-            wake,
+            wake: wake.clone(),
             manual: String::new(),
             tray,
             quitting: false,
             forget_confirm: None,
+            updates: updates::Checker::start(wake.clone()),
+            update_note: None,
         }
     }
 
@@ -300,7 +311,7 @@ impl App {
             let r = Session::start(&t.addr, &id, pin, ev_tx, v_tx, wake.clone()).map(|session| {
                 decode::spawn(v_rx, shared.clone(), wake.clone());
                 Box::new(Live {
-                    session, events: ev_rx, shared, windows: vec![], active: json!({"none": {}}), mac_name: t.name.clone(), machines: vec![], switch_to: None, note: None, auto_pick: None, listed: false, pan: (0.5, 0.5), files_ok: false,
+                    session, events: ev_rx, shared, windows: vec![], active: json!({"none": {}}), mac_name: t.name.clone(), machines: vec![], switch_to: None, note: None, auto_pick: None, listed: false, pan: (0.5, 0.5), files_ok: false, host_build: None, host_update: false, host_can_update: false,
                     settings: None, rtt: 0.0, sent_viewport: (0.0, 0.0, 0, 0, 0, 0), match_screen: false, sent_mods: Modifiers::NONE,
                     buttons_down: vec![], scroll_open: None, last_pos: (0.5, 0.5), token: 0, fps: 60,
                     cursor_in_video: false, fullscreen: false, os_fullscreen: None,
@@ -398,6 +409,18 @@ impl App {
         ui.add_space(16.0);
         ui.heading("Sill Viewer");
         ui.label(RichText::new("An unofficial companion to Sill (getsill.app). Not made by the Sill team.").weak().small());
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(format!("Version {}", updates::short(updates::BUILD))).weak().small());
+            if self.updates.available() {
+                ui.label(RichText::new("Update available").color(Color32::from_rgb(90, 170, 255)));
+                if ui.small_button(updates::button_label()).clicked() {
+                    self.update_note = Some(updates::start_self_update().unwrap_or_else(|e| e));
+                }
+            }
+            if let Some(n) = &self.update_note {
+                ui.label(RichText::new(n).weak().small());
+            }
+        });
         ui.label("Computers that run a Sill host on this network:");
         ui.add_space(8.0);
         let found = self.browser.found.lock().unwrap().clone();
@@ -603,6 +626,9 @@ fn stream(ctx: &egui::Context, live: &mut Live, target: &Target) -> Option<Strin
             Event::WindowList(v) => {
                 live.windows = v["windows"].as_array().cloned().unwrap_or_default();
                 live.files_ok = v["files"].as_i64().unwrap_or(0) >= 1;
+                live.host_build = v["hostBuild"].as_str().map(String::from);
+                live.host_update = v["hostUpdate"] == true;
+                live.host_can_update = v["hostCanUpdate"] == true;
                 // The host draws its cursor into the video only when it says so; otherwise this
                 // window's own cursor is the one to see, and it is exactly where the input goes.
                 live.cursor_in_video = v["cursorInVideo"] == true;
@@ -613,7 +639,12 @@ fn stream(ctx: &egui::Context, live: &mut Live, target: &Target) -> Option<Strin
                     live.auto_pick = None;
                 }
             }
-            Event::HostSettings(v) => live.settings = Some(v),
+            Event::HostSettings(v) => {
+                if let Some(n) = v["note"].as_str() {
+                    live.note = Some((n.to_string(), Instant::now()));
+                }
+                live.settings = Some(v);
+            }
             Event::Note(t) => live.note = Some((t, Instant::now())),
             Event::Rtt(ms) => live.rtt = if live.rtt == 0.0 { ms } else { live.rtt * 0.8 + ms * 0.2 },
             Event::Goodbye(v) => {
@@ -774,8 +805,22 @@ fn stream(ctx: &egui::Context, live: &mut Live, target: &Target) -> Option<Strin
                         live.fullscreen = true;
                         ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(true));
                     }
+                    if live.host_update {
+                        if live.host_can_update {
+                            if ui.button("Update host").on_hover_text(format!(
+                                "{} has an update. It installs it and restarts; this window connects again.", live.mac_name)).clicked() {
+                                setting(live, "updateHost", json!(true));
+                                live.note = Some((format!("Asking {} to update…", live.mac_name), Instant::now()));
+                            }
+                        } else {
+                            ui.label(RichText::new("Host update available").color(Color32::from_rgb(90, 170, 255)));
+                        }
+                    }
                     let sh = live.shared.lock().unwrap();
-                    ui.label(RichText::new(format!("{}×{} · {} · {:.0} ms", sh.size.0, sh.size.1, sh.decoder, live.rtt)).weak());
+                    let versions = format!("Viewer {}{}", updates::short(updates::BUILD),
+                        live.host_build.as_deref().map(|b| format!(" · host {}", updates::short(b))).unwrap_or_default());
+                    ui.label(RichText::new(format!("{}×{} · {} · {:.0} ms", sh.size.0, sh.size.1, sh.decoder, live.rtt)).weak())
+                        .on_hover_text(versions);
                 });
             });
         });
