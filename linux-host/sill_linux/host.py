@@ -568,8 +568,12 @@ class Host:
         # so a node ID there links to nothing and no frame ever arrives.
         target = "path"
         extra = ""
+        # GNOME sends a frame only when the screen changes. On a still screen, PipeWire repeats the
+        # last one once a second: enough for the 8 s no-frames check and to sharpen the picture, and
+        # the GPU sleeps in between (at 100 ms it encoded 10 identical frames a second, ~100 W on a
+        # 3080 Ti). Sill's own Mac host sends nothing on a still screen, so viewers expect gaps.
         if el.find_property("keepalive-time"):
-            extra += " keepalive-time=100"
+            extra += " keepalive-time=1000"
         # A virtual screen's frames as DMA-BUFs: GNOME hands over the GPU buffer, instead of
         # copying every frame into memory first. With NVIDIA (GNOME 50) that copy held GNOME at
         # about 5 frames a second. The frame then goes GL -> CUDA -> encoder without leaving the
