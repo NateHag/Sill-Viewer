@@ -11,7 +11,7 @@ import zlib
 
 from gi.repository import GLib
 
-from . import files, keymap, mutter, video, wire
+from . import files, keymap, mutter, updates, video, wire
 from .identity import Devices, Identity, config_dir
 from .mdns import Advertiser
 from .net import Door
@@ -145,6 +145,7 @@ class Host:
             self.monitors = mutter.monitors(self.bus)
             mutter.watch_monitors(self.bus, self._monitors_changed)
             log.info("monitors: %s", self.monitors)
+        self.updates = updates.Checker(on_change=lambda: GLib.idle_add(lambda: (self.broadcast_window_list(), False)[1]))
         self.door = Door(self.identity, args.port, self, self.devices, require_pairing=not args.open)
         self.pairing = Pairing(self.identity, self.devices, self.name, self.door.port, local_addresses)
         self.advertiser = Advertiser(self.name, self.door.port, self._txt)
@@ -156,6 +157,8 @@ class Host:
         self.advertiser.start()
         self._control_server()
         GLib.timeout_add(2000, self._watchdog)
+        self.updates.start()
+        log.info("version %s", updates.short(updates.BUILD))
         log.info("ready: \"%s\", ID %s, port %d, %s", self.name, self.identity.mac_id[:6], self.door.port,
                  "pairing required" if not self.args.open else "OPEN: any device may connect")
         self.loop = GLib.MainLoop()
@@ -194,6 +197,9 @@ class Host:
                             "bundleID": "linux.virtual", "width": 0, "height": 0})
         return {"macName": self.name, "windows": windows, "active": self.active, "launchID": self.launch_id,
                 "hostVersion": "0.1.0", "protocol": wire.PROTOCOL,
+                # Sill Viewer reads these; Sill on iPhone and iPad leaves them out.
+                "hostBuild": updates.BUILD, "hostUpdate": self.updates.available,
+                "hostCanUpdate": updates.can_update(),
                 "cursorInVideo": bool(self.running.cursor) if self.running is not None else False,
                 "clipboard": 1, "files": 1}
 
@@ -403,6 +409,13 @@ class Host:
 
     # --- settings --------------------------------------------------------------------------------
     def _change_settings(self, s, ch):
+        if ch.get("updateHost") is True:
+            # A paired viewer asks this host to update itself (the user clicked Update host).
+            log.info("%s asks for an update", s if s is not None else "the tray")
+            note = updates.run_update()
+            if s is not None:
+                s.send(wire.jmsg(wire.HOST_SETTINGS, dict(self.settings_state(answering=ch.get("token")), note=note)))
+            return
         v = self.settings.values
         if "maxFPS" in ch and ch["maxFPS"] in (30, 60, 120):
             v["maxFPS"] = ch["maxFPS"]
@@ -969,7 +982,10 @@ class Host:
                     "stream": r.__dict__ if r else None,
                     "encoder": self.pipeline.encoder if self.pipeline else None,
                     "frames": self.pipeline.frames if self.pipeline else 0,
-                    "captureSize": self.pipeline.capture_size if self.pipeline else None}
+                    "captureSize": self.pipeline.capture_size if self.pipeline else None,
+                    "build": updates.BUILD, "update": self.updates.available, "canUpdate": updates.can_update()}
+        if op == "update":
+            return {"note": updates.run_update()}
         if op in ("pause", "resume"):
             self.settings.values["paused"] = op == "pause"
             self.settings.save()
