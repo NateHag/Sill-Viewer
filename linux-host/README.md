@@ -62,6 +62,13 @@ Options go in the service file (`~/.config/systemd/user/sill-linux.service`, the
 Single app windows (GNOME has no API for that), the app list, Mac menus, trackpad gestures,
 remote access from outside your network (Tailscale to the home port may work).
 
+## Display watchdog (optional)
+
+On NVIDIA, a GNOME virtual screen can leave the desktop stuck: the monitor stays black and
+gnome-shell logs `Failed to lock front buffer` about once a minute. `display-watchdog/install.sh`
+adds a small root service that restarts GDM when that keeps happening for 90 seconds or more
+(at most once an hour). Nothing else is touched. Log: `journalctl -u sill-display-watchdog`.
+
 ## Uninstall
 
 ```

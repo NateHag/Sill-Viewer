@@ -1,0 +1,132 @@
+#!/usr/bin/python3
+"""Restarts GDM when GNOME's desktop is stuck and can no longer draw to the monitor.
+
+The stuck state: after a virtual screen (Sill's old Fit screen) on an NVIDIA card, gnome-shell
+logs "Failed to lock front buffer" about once a minute, forever, and the monitor stays black.
+Only a new gnome-shell fixes it, which means restarting GDM (it logs back in by itself when
+auto-login is on).
+
+It touches nothing else. It acts only when ALL of these hold:
+  - the message comes from a gnome-shell process that is still running,
+  - that same process logged it at 3 moments at least 45 s apart, within 10 minutes (so a
+    one-second burst, which GNOME can recover from by itself, never counts),
+  - it has not restarted GDM in the last hour.
+Services that keep running without a desktop login (lingering user services, system services)
+are not affected by a GDM restart.
+
+  sill-display-watchdog            watch the journal and act (run as root by its service)
+  sill-display-watchdog --dry-run  watch and say what it would do, without doing it
+Log: journalctl -u sill-display-watchdog
+"""
+import collections
+import json
+import os
+import subprocess
+import sys
+import time
+
+MESSAGE = "Failed to lock front buffer"
+HITS = 3
+SPACING_S = 45
+WINDOW_S = 600
+COOLDOWN_S = 3600
+STATE = "/var/lib/sill-display-watchdog/last-restart"
+
+
+def is_live_gnome_shell(pid):
+    try:
+        with open(f"/proc/{pid}/comm") as f:
+            return f.read().strip() == "gnome-shell"
+    except OSError:
+        return False
+
+
+def restart_gdm():
+    subprocess.run(["systemctl", "restart", "gdm"], check=True)
+
+
+class Watchdog:
+    def __init__(self, act, clock=time.time, is_live=is_live_gnome_shell, last_restart=0.0, dry_run=False):
+        self.act = act
+        self.clock = clock
+        self.is_live = is_live
+        self.last_restart = last_restart
+        self.dry_run = dry_run
+        self.hits = collections.defaultdict(collections.deque)
+
+    def feed(self, entry):
+        """Takes one journal entry (a dict). Returns True when it restarted GDM."""
+        if MESSAGE not in str(entry.get("MESSAGE", "")):
+            return False
+        pid = str(entry.get("_PID", ""))
+        if not pid.isdigit() or not self.is_live(pid):
+            return False
+        now = self.clock()
+        q = self.hits[pid]
+        if q and now - q[-1] < SPACING_S:
+            return False
+        q.append(now)
+        while q and now - q[0] > WINDOW_S:
+            q.popleft()
+        if len(q) < HITS:
+            return False
+        if now - self.last_restart < COOLDOWN_S:
+            log(f"gnome-shell {pid} is stuck, but GDM was restarted {int(now - self.last_restart)} s ago; waiting")
+            q.clear()
+            return False
+        if self.dry_run:
+            log(f"gnome-shell {pid} is stuck ({len(q)} front-buffer failures in {WINDOW_S // 60} min); "
+                "would restart GDM (dry run)")
+            q.clear()
+            return False
+        log(f"gnome-shell {pid} is stuck ({len(q)} front-buffer failures in {WINDOW_S // 60} min); restarting GDM")
+        self.act()
+        self.last_restart = now
+        self.hits.clear()
+        return True
+
+
+def log(msg):
+    print(msg, flush=True)
+
+
+def read_last_restart():
+    try:
+        with open(STATE) as f:
+            return float(f.read().strip())
+    except (OSError, ValueError):
+        return 0.0
+
+
+def write_last_restart(t):
+    os.makedirs(os.path.dirname(STATE), exist_ok=True)
+    with open(STATE, "w") as f:
+        f.write(f"{t}\n")
+
+
+def main():
+    dry_run = "--dry-run" in sys.argv[1:]
+
+    def act():
+        restart_gdm()
+        write_last_restart(time.time())
+
+    dog = Watchdog(act, last_restart=read_last_restart(), dry_run=dry_run)
+    log(f"watching for a stuck GNOME desktop{' (dry run)' if dry_run else ''}")
+    proc = subprocess.Popen(
+        ["journalctl", "--follow", "--lines=0", "--output=json", "SYSLOG_IDENTIFIER=gnome-shell"],
+        stdout=subprocess.PIPE, text=True)
+    for line in proc.stdout:
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        try:
+            dog.feed(entry)
+        except subprocess.CalledProcessError as e:
+            log(f"restarting GDM failed: {e}")
+    sys.exit(proc.wait() or 1)
+
+
+if __name__ == "__main__":
+    main()
