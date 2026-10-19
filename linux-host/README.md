@@ -23,6 +23,9 @@ cd sill-linux
 
 You pair one time. After that, tap and go.
 
+If the computer's screen is locked, connecting unlocks it (GNOME shows nothing to a screen share
+while locked). Only a device you paired can connect, so it needs no password.
+
 ## What you can pick on the iPad
 
 - **The desktop:** your main monitor.

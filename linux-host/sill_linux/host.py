@@ -47,6 +47,23 @@ def local_addresses():
     return [ip for _, ip in sorted(found)]
 
 
+def unlock_desktop():
+    """Unlocks this user's GNOME desktop. GNOME's lock screen refuses every screen cast, so a
+    paired device would wait for a picture forever. gnome-shell follows logind's Unlock signal,
+    which this user may send for their own session. True when the unlock was sent."""
+    try:
+        sid = subprocess.run(["loginctl", "show-user", str(os.getuid()), "--property=Display", "--value"],
+                             capture_output=True, text=True, timeout=5).stdout.strip()
+        if not sid:
+            return False
+        r = subprocess.run(["loginctl", "unlock-session", sid], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if r.returncode != 0:
+        log.warning("could not unlock the desktop: %s", r.stderr.strip())
+    return r.returncode == 0
+
+
 def _even(n):
     return max(2, int(n) // 2 * 2)
 
@@ -106,6 +123,7 @@ class Host:
         self.pipeline = None
         self.running = None          # the Spec now running
         self.fail_count = 0
+        self.unlocked_at = 0.0       # when a locked desktop was last unlocked for a device
         # Highest frame rate this computer's encoder managed; lowered when a faster one fails.
         self.fps_limit = 120
         self.apply_pending = None
@@ -511,6 +529,12 @@ class Host:
         except GLib.Error as e:
             log.error("screen cast: %s", e.message)
             self.capture = None
+            with self.lock:
+                devices = len(self.sessions)   # paired devices connected right now
+            if "inhibited" in e.message and devices and time.monotonic() - self.unlocked_at > 10:
+                self.unlocked_at = time.monotonic()
+                if unlock_desktop():
+                    log.info("the desktop was locked; unlocked it for %d device(s)", devices)
             self._retry()
 
     def _cursor_in_video(self, sessions):
