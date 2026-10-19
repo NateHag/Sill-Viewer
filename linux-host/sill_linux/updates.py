@@ -38,12 +38,24 @@ def short(sha):
     return sha[:7] if sha and sha != "dev" else (sha or "dev")
 
 
-def newest_commit():
-    """The newest commit on GitHub's main that changed this host's folder."""
-    url = f"https://api.github.com/repos/{REPO}/commits?sha=main&path={FOLDER}&per_page=1"
+def _get(url):
     req = urllib.request.Request(url, headers={"User-Agent": "sill-linux", "Accept": "application/vnd.github+json"})
     with urllib.request.urlopen(req, timeout=15) as r:
-        data = json.load(r)
+        return json.load(r)
+
+
+def is_ahead(base, head):
+    """True when `head` comes after `base` in GitHub's history: a newer version, not an older one
+    and not one on another branch. GitHub's compare answers "ahead" exactly then."""
+    try:
+        return _get(f"https://api.github.com/repos/{REPO}/compare/{base}...{head}").get("status") == "ahead"
+    except Exception:   # 404: GitHub does not know this build (never pushed); or no answer
+        return False
+
+
+def newest_commit():
+    """The newest commit on GitHub's main that changed this host's folder."""
+    data = _get(f"https://api.github.com/repos/{REPO}/commits?sha=main&path={FOLDER}&per_page=1")
     sha = data[0]["sha"] if isinstance(data, list) and data else None
     if not (isinstance(sha, str) and len(sha) == 40):
         raise ValueError("unexpected answer from GitHub")
@@ -55,12 +67,13 @@ class Checker:
 
     def __init__(self, on_change=None):
         self.newest = None
+        self.newer = False      # GitHub's newest comes after this build (not merely differs)
         self.checked = 0.0
         self.on_change = on_change
 
     @property
     def available(self):
-        return BUILD != "dev" and self.newest is not None and self.newest != BUILD
+        return self.newer
 
     def start(self):
         threading.Thread(target=self._loop, name="update-check", daemon=True).start()
@@ -79,9 +92,12 @@ class Checker:
             return
         self.checked = time.time()
         if sha != self.newest:
-            self.newest = sha
-            if self.available:
+            newer = BUILD != "dev" and sha != BUILD and is_ahead(BUILD, sha)
+            self.newest, self.newer = sha, newer
+            if newer:
                 log.info("update available: this is %s, GitHub has %s", short(BUILD), short(sha))
+            elif sha != BUILD:
+                log.info("GitHub has %s; this build (%s) is not older, so no update", short(sha), short(BUILD))
             if self.on_change:
                 self.on_change()
 

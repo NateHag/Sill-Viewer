@@ -23,7 +23,8 @@ pub fn short(sha: &str) -> &str {
 
 #[derive(Clone, Default)]
 pub struct Checker {
-    newest: Arc<Mutex<Option<String>>>,
+    /// GitHub's newest commit for viewer/, and whether it comes after this build.
+    newest: Arc<Mutex<Option<(String, bool)>>>,
 }
 
 impl Checker {
@@ -35,12 +36,14 @@ impl Checker {
             loop {
                 match newest_commit() {
                     Some(sha) => {
-                        let changed = newest.lock().unwrap().as_deref() != Some(sha.as_str());
+                        let changed = newest.lock().unwrap().as_ref().map(|n| n.0.as_str()) != Some(sha.as_str());
                         if changed {
-                            if sha != BUILD && BUILD != "dev" {
+                            // Only a newer version is an update: not an older one, not another branch.
+                            let newer = BUILD != "dev" && sha != BUILD && is_ahead(BUILD, &sha);
+                            if newer {
                                 log::info!("update available: this is {}, GitHub has {}", short(BUILD), short(&sha));
                             }
-                            *newest.lock().unwrap() = Some(sha);
+                            *newest.lock().unwrap() = Some((sha, newer));
                             wake();
                         }
                     }
@@ -53,13 +56,8 @@ impl Checker {
     }
 
     pub fn available(&self) -> bool {
-        is_newer(BUILD, self.newest.lock().unwrap().as_deref())
+        self.newest.lock().unwrap().as_ref().is_some_and(|n| n.1)
     }
-}
-
-/// True when GitHub's newest commit is not this build (a "dev" build never asks for updates).
-fn is_newer(build: &str, newest: Option<&str>) -> bool {
-    build != "dev" && matches!(newest, Some(n) if n != build)
 }
 
 fn quiet(cmd: &mut Command) -> &mut Command {
@@ -72,14 +70,29 @@ fn quiet(cmd: &mut Command) -> &mut Command {
     cmd
 }
 
-/// The sha of the newest commit in viewer/ on GitHub's main. curl is on every Mac, every Linux
-/// desktop and Windows 10 and later.
-fn newest_commit() -> Option<String> {
+/// A GET to GitHub's API. curl is on every Mac, every Linux desktop and Windows 10 and later.
+fn github(url: &str) -> Option<Vec<u8>> {
     let mut cmd = Command::new("curl");
     quiet(&mut cmd).stdout(Stdio::piped());
-    cmd.args(["-fsSL", "--max-time", "20", "-H", "User-Agent: sill-viewer", "-H", "Accept: application/vnd.github+json", API]);
-    let out = cmd.output().ok().filter(|o| o.status.success())?;
-    parse_newest(&out.stdout)
+    cmd.args(["-fsSL", "--max-time", "20", "-H", "User-Agent: sill-viewer", "-H", "Accept: application/vnd.github+json", url]);
+    cmd.output().ok().filter(|o| o.status.success()).map(|o| o.stdout)
+}
+
+/// The sha of the newest commit in viewer/ on GitHub's main.
+fn newest_commit() -> Option<String> {
+    parse_newest(&github(API)?)
+}
+
+/// True when `head` comes after `base` in GitHub's history (its compare says "ahead"). An unknown
+/// build (never pushed) or no answer: false.
+fn is_ahead(base: &str, head: &str) -> bool {
+    let url = format!("https://api.github.com/repos/NateHag/Sill-Viewer/compare/{base}...{head}");
+    github(&url).is_some_and(|b| parse_status(&b).as_deref() == Some("ahead"))
+}
+
+fn parse_status(body: &[u8]) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_slice(body).ok()?;
+    v.get("status")?.as_str().map(String::from)
 }
 
 fn parse_newest(body: &[u8]) -> Option<String> {
@@ -137,15 +150,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn newer() {
-        let a = "a".repeat(40);
-        let b = "b".repeat(40);
-        assert!(is_newer(&a, Some(&b)));
-        assert!(!is_newer(&a, Some(&a)));
-        assert!(!is_newer(&a, None));
-        assert!(!is_newer("dev", Some(&b)));
-        assert_eq!(short(&a), "aaaaaaa");
+    fn names() {
+        assert_eq!(short(&"a".repeat(40)), "aaaaaaa");
         assert_eq!(short("dev"), "dev");
+        assert!(!Checker::default().available());
+    }
+
+    #[test]
+    fn compare_answer() {
+        assert_eq!(parse_status(br#"{"status":"ahead","ahead_by":2}"#).as_deref(), Some("ahead"));
+        assert_eq!(parse_status(br#"{"status":"behind"}"#).as_deref(), Some("behind"));
+        assert_eq!(parse_status(br#"{"message":"Not Found"}"#), None);
+    }
+
+    /// Asks the real GitHub (needs the network): run with `cargo test -- --ignored`.
+    #[test]
+    #[ignore]
+    fn compare_on_github() {
+        let main_old = "fc9077bf13fde6567253a4137c5e1c8ab74e8bff";
+        let branch = "61edf65bb30b68230755d336037f10417a42c630";
+        assert!(is_ahead(main_old, branch));
+        assert!(!is_ahead(branch, main_old));
     }
 
     #[test]
