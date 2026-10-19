@@ -103,8 +103,10 @@ def main():
     ap = argparse.ArgumentParser(prog="sill-linux", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("command", nargs="?", default="run",
-                    choices=["run", "pair", "status", "devices", "forget", "check", "tray", "pause", "resume", "release"])
-    ap.add_argument("device", nargs="?", help="with forget: the device's name")
+                    choices=["run", "pair", "status", "devices", "forget", "check", "tray", "pause", "resume", "release",
+                             "watchdog"])
+    ap.add_argument("device", nargs="?",
+                    help="with forget: the device's name; with watchdog: on, off, pause (4 hours), resume or status")
     ap.add_argument("--name", help="the name devices see (default: this computer's host name)")
     ap.add_argument("--port", type=int, default=7456, help="TCP port (default 7456)")
     ap.add_argument("--open", action="store_true",
@@ -151,6 +153,21 @@ def main():
     if args.command in ("pause", "resume"):
         r = control(args.command)
         print("Sharing is paused." if r.get("paused") else "Sharing is on.")
+        return
+    if args.command == "watchdog":
+        from . import watchdog
+        what = args.device or "status"
+        if what == "on":
+            watchdog.save(enabled=True)
+        elif what == "off":
+            watchdog.save(enabled=False)
+        elif what == "pause":
+            watchdog.pause()
+        elif what == "resume":
+            watchdog.resume()
+        elif what != "status":
+            sys.exit("usage: sill-linux watchdog [on|off|pause|resume|status]")
+        print(watchdog.describe())
         return
     if args.command == "status":
         print(json.dumps(control("status"), indent=2))
