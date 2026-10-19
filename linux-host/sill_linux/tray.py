@@ -80,7 +80,8 @@ class Tray:
         return {"paused": st.get("paused"), "sessions": [(x["name"], x["address"]) for x in st.get("sessions", [])],
                 "devices": [(d["key"], d["name"]) for d in st.get("devices", [])],
                 "settings": s.get("settings"), "vd": s.get("virtualDisplayAvailable"),
-                "stream": s.get("stream"), "name": st.get("name")}
+                "stream": s.get("stream"), "name": st.get("name"),
+                "build": st.get("build"), "update": st.get("update"), "canUpdate": st.get("canUpdate")}
 
     # --- the menu ----------------------------------------------------------------------------------
     def item(self, menu, label, callback=None, sensitive=True):
@@ -171,6 +172,13 @@ class Tray:
             dsub = self.submenu(sub, f"{d['name']} ({d.get('model') or 'device'})")
             self.item(dsub, "Remove", lambda k=d["key"]: self.act("forget", device=k))
         menu.append(Gtk.SeparatorMenuItem())
+        build = st.get("build") or "dev"
+        self.item(menu, f"Version {build[:7]}")
+        if st.get("update"):
+            if st.get("canUpdate"):
+                self.item(menu, "Update available: Update now", lambda: self.act("update"))
+            else:
+                self.item(menu, "Update available (install the new download)")
         self.item(menu, "Show log", self.show_log)
         self.item(menu, "Restart Sill", lambda: systemctl("restart", "sill-linux"))
         self.item(menu, "Stop Sill", self.stop)

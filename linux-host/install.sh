@@ -64,8 +64,10 @@ systemctl --user restart sill-linux.service sill-linux-tray.service
 sleep 2
 systemctl --user --no-pager status sill-linux.service | head -5
 
-echo "==> Automatic updates (every hour, from GitHub)"
-./update.sh --install
+echo "==> Updates"
+echo "Sill shows when an update is available. You choose when to install it."
+read -r -p "Install updates by themselves instead, every hour? [y/N] " a </dev/tty || a=n
+case "$a" in [yY]*) ./update.sh --install ;; *) ./update.sh --setup ;; esac
 
 echo "==> Display watchdog (restarts GDM if the desktop gets stuck on a black screen)"
 display-watchdog/install.sh

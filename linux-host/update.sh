@@ -1,27 +1,23 @@
 #!/bin/bash
-# Keeps the Sill for Linux host up to date with GitHub. No password needed.
+# Updates the Sill for Linux host from GitHub. No password needed.
 #
 #   update.sh             update if GitHub has a newer host (restarts it only when its code changed)
 #   update.sh --force     install the newest host now
-#   update.sh --install   also check every hour, and at login, from now on
-#   update.sh --uninstall stop the hourly check
-# Log: journalctl --user -u sill-linux-update
+#   update.sh --setup     install this updater (as sill-linux-update), so the tray's "Update now"
+#                         and a viewer's "Update host" work. Nothing updates by itself.
+#   update.sh --install   automatic updates: also update every hour, and at login
+#   update.sh --uninstall no automatic updates (Update now still works)
+# Automatic updates are off unless --install turned them on. Log: journalctl --user -u sill-linux-update
 set -eu
 REPO=NateHag/Sill-Viewer
 APP="$HOME/.local/share/sill-linux/app"
 STATE="$HOME/.local/share/sill-linux/installed-commit"
 UNIT="$HOME/.config/systemd/user"
+AUTO="$HOME/.config/sill-linux/auto-update"     # exists only when the user chose automatic updates
 
-if [ "${1:-}" = "--uninstall" ]; then
-    systemctl --user disable --now sill-linux-update.timer 2>/dev/null || true
-    rm -f "$UNIT/sill-linux-update.timer" "$UNIT/sill-linux-update.service"
-    systemctl --user daemon-reload
-    echo "The hourly update check is off."
-    exit 0
-fi
-if [ "${1:-}" = "--install" ]; then
+setup() {
     mkdir -p "$HOME/.local/bin" "$UNIT"
-    cp "$0" "$HOME/.local/bin/sill-linux-update" 2>/dev/null || true
+    [ "$(realpath "$0")" = "$(realpath -m "$HOME/.local/bin/sill-linux-update")" ] || cp "$0" "$HOME/.local/bin/sill-linux-update"
     chmod +x "$HOME/.local/bin/sill-linux-update"
     cat > "$UNIT/sill-linux-update.service" <<U
 [Unit]
@@ -31,6 +27,28 @@ Description=Update Sill for Linux from GitHub
 Type=oneshot
 ExecStart=%h/.local/bin/sill-linux-update
 U
+    systemctl --user daemon-reload
+}
+
+auto_off() {
+    systemctl --user disable --now sill-linux-update.timer 2>/dev/null || true
+    rm -f "$UNIT/sill-linux-update.timer" "$AUTO"
+    systemctl --user daemon-reload
+}
+
+if [ "${1:-}" = "--uninstall" ]; then
+    auto_off
+    echo "Automatic updates are off. The tray's Update now still works."
+    exit 0
+fi
+if [ "${1:-}" = "--setup" ]; then
+    setup
+    echo "The updater is installed. Nothing updates by itself; Sill shows when an update is available."
+    exit 0
+fi
+if [ "${1:-}" = "--install" ]; then
+    setup
+    mkdir -p "$(dirname "$AUTO")" && : > "$AUTO"
     cat > "$UNIT/sill-linux-update.timer" <<U
 [Unit]
 Description=Check for Sill for Linux updates every hour
@@ -45,15 +63,26 @@ WantedBy=timers.target
 U
     systemctl --user daemon-reload
     systemctl --user enable --now sill-linux-update.timer
-    echo "This computer now checks for updates every hour. Log: journalctl --user -u sill-linux-update"
+    echo "Automatic updates are on: every hour. Turn them off: sill-linux-update --uninstall"
     exit 0
 fi
+
+# Automatic updates used to be on for everyone. Now they are a choice: a timer without that choice
+# recorded is turned off (once), after this run's update.
+migrate=0
+if [ ! -e "$AUTO" ] && [ -e "$UNIT/sill-linux-update.timer" ]; then migrate=1; fi
 
 force=0; [ "${1:-}" = "--force" ] && force=1
 sha="$(curl -fsSL -H "Accept: application/vnd.github.sha" "https://api.github.com/repos/$REPO/commits/main")" || {
     echo "no connection to GitHub; trying later"; exit 0; }
 case "$sha" in [0-9a-f]*) ;; *) echo "unexpected answer from GitHub"; exit 0 ;; esac
-if [ "$sha" = "$(cat "$STATE" 2>/dev/null || true)" ] && [ $force = 0 ]; then exit 0; fi
+migrate_now() {
+    [ $migrate = 1 ] || return 0
+    auto_off
+    echo "automatic updates are now off by default; Sill shows when an update is available."
+    echo "to turn them on again: sill-linux-update --install"
+}
+if [ "$sha" = "$(cat "$STATE" 2>/dev/null || true)" ] && [ $force = 0 ]; then migrate_now; exit 0; fi
 
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 # By commit, not by branch: GitHub's cache could hand out an older file for a few minutes.
@@ -80,3 +109,4 @@ if [ -f "$new/update.sh" ] && [ -f "$HOME/.local/bin/sill-linux-update" ]; then
         && mv "$HOME/.local/bin/sill-linux-update.new" "$HOME/.local/bin/sill-linux-update"
 fi
 echo "$sha" > "$STATE"
+migrate_now
