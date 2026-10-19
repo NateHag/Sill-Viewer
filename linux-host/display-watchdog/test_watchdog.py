@@ -30,9 +30,9 @@ def make(live=("4248",), last_restart=0.0, dry_run=False):
     return dog, clock, acted
 
 
-def feed(dog, clock, n, pid="4248", msg=STUCK, step=60):
+def feed(dog, clock, n, pid="4248", msg=STUCK, step=60, exe="/usr/bin/gnome-shell"):
     for _ in range(n):
-        dog.feed({"MESSAGE": msg, "_PID": pid})
+        dog.feed({"MESSAGE": msg, "_PID": pid, "_EXE": exe})
         clock.t += step
 
 
@@ -60,6 +60,11 @@ class WatchdogTest(unittest.TestCase):
         clock.t += 60
         feed(dog, clock, 2)
         self.assertEqual(len(acted), 1)
+
+    def test_another_program_sending_the_message_does_nothing(self):
+        dog, clock, acted = make()
+        feed(dog, clock, 10, exe="/usr/bin/logger")
+        self.assertEqual(acted, [])
 
     def test_other_messages_do_nothing(self):
         dog, clock, acted = make()

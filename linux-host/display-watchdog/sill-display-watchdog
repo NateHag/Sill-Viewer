@@ -33,10 +33,13 @@ COOLDOWN_S = 3600
 STATE = "/var/lib/sill-display-watchdog/last-restart"
 
 
+GNOME_SHELL = "/usr/bin/gnome-shell"
+
+
 def is_live_gnome_shell(pid):
+    # The real binary, not the process name: any program can call itself "gnome-shell".
     try:
-        with open(f"/proc/{pid}/comm") as f:
-            return f.read().strip() == "gnome-shell"
+        return os.readlink(f"/proc/{pid}/exe") == GNOME_SHELL
     except OSError:
         return False
 
@@ -57,6 +60,9 @@ class Watchdog:
     def feed(self, entry):
         """Takes one journal entry (a dict). Returns True when it restarted GDM."""
         if MESSAGE not in str(entry.get("MESSAGE", "")):
+            return False
+        # _EXE is set by journald itself; SYSLOG_IDENTIFIER is whatever the sender claims.
+        if entry.get("_EXE") != GNOME_SHELL:
             return False
         pid = str(entry.get("_PID", ""))
         if not pid.isdigit() or not self.is_live(pid):
@@ -114,7 +120,7 @@ def main():
     dog = Watchdog(act, last_restart=read_last_restart(), dry_run=dry_run)
     log(f"watching for a stuck GNOME desktop{' (dry run)' if dry_run else ''}")
     proc = subprocess.Popen(
-        ["journalctl", "--follow", "--lines=0", "--output=json", "SYSLOG_IDENTIFIER=gnome-shell"],
+        ["journalctl", "--follow", "--lines=0", "--output=json", f"_EXE={GNOME_SHELL}"],
         stdout=subprocess.PIPE, text=True)
     for line in proc.stdout:
         try:
