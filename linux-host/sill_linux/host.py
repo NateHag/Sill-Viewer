@@ -531,7 +531,9 @@ class Host:
             self.capture = None
             with self.lock:
                 devices = len(self.sessions)   # paired devices connected right now
-            if "inhibited" in e.message and devices and time.monotonic() - self.unlocked_at > 10:
+            # Never with --open: there an unpaired device could connect and unlock the desktop.
+            if ("inhibited" in e.message and devices and not self.args.open
+                    and time.monotonic() - self.unlocked_at > 10):
                 self.unlocked_at = time.monotonic()
                 if unlock_desktop():
                     log.info("the desktop was locked; unlocked it for %d device(s)", devices)
