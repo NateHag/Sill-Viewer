@@ -24,8 +24,9 @@ static ZOOM: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0)
 const BAR_REVEAL: Duration = Duration::from_millis(300);
 /// The pointer left the window this close to the top (points): it went out through the top edge.
 const TOP_EXIT: f32 = 24.0;
-/// Room for the Mac's menu bar (taller on a MacBook with a notch), which the same edge brings down.
-const MAC_MENU_BAR: f32 = 38.0;
+/// Room for what the same edge brings down on a Mac in full screen: the menu bar (37 pt on a
+/// MacBook with a notch) and, under it, the window's title bar (28 pt).
+const MAC_MENU_BAR: f32 = 68.0;
 const ZOOMS: [(u32, &str); 6] = [(0, "Fit"), (100, "100%"), (125, "125%"), (150, "150%"), (175, "175%"), (200, "200%")];
 
 fn zoom() -> u32 {
@@ -755,7 +756,7 @@ fn stream(ctx: &egui::Context, live: &mut Live, target: &Target) -> Option<Strin
     // picture, as in the Mac's Screen Sharing; it goes away when the pointer leaves it. Over the
     // picture, not above it: a smaller picture would resize a host's virtual screen.
     if live.fullscreen && fullscreen_bar_wanted(ctx, live) {
-        // On a Mac the same edge slides down the menu bar, which would cover the bar.
+        // On a Mac the same edge slides down the menu bar and the title bar, which would cover it.
         let top = if cfg!(target_os = "macos") { MAC_MENU_BAR } else { 0.0 };
         let width = ctx.screen_rect().width();
         let r = egui::Area::new(egui::Id::new("fullscreen-bar"))
