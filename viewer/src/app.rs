@@ -20,6 +20,10 @@ use crate::tray::PRESETS;
 
 /// Zoom, in percent of one picture pixel per screen pixel; 0 = fit the window. Kept between runs.
 static ZOOM: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+/// How long the pointer rests at the top edge in full screen before the bar comes back.
+const BAR_REVEAL: Duration = Duration::from_millis(300);
+/// Room for the Mac's menu bar (taller on a MacBook with a notch), which the same edge brings down.
+const MAC_MENU_BAR: f32 = 38.0;
 const ZOOMS: [(u32, &str); 6] = [(0, "Fit"), (100, "100%"), (125, "125%"), (150, "150%"), (175, "175%"), (200, "200%")];
 
 fn zoom() -> u32 {
@@ -83,6 +87,11 @@ struct Live {
     /// The window's real full screen state, as last seen: the OS can change it (the Mac's green
     /// button, Ctrl+Cmd+F, F11 on Linux), and then the app follows.
     os_fullscreen: Option<bool>,
+    /// The full screen bar: when the pointer reached the top edge, whether the bar shows, and
+    /// where it ends (to keep it while the pointer is on it).
+    bar_hold: Option<Instant>,
+    bar_shown: bool,
+    bar_bottom: f32,
 }
 
 enum Screen {
@@ -304,6 +313,7 @@ impl App {
                     settings: None, rtt: 0.0, sent_viewport: (0.0, 0.0, 0, 0, 0, 0), match_screen: false, sent_mods: Modifiers::NONE,
                     buttons_down: vec![], scroll_open: None, last_pos: (0.5, 0.5), token: 0, fps: 60,
                     cursor_in_video: false, fullscreen: false, os_fullscreen: None,
+                    bar_hold: None, bar_shown: false, bar_bottom: 0.0,
                 })
             });
             let _ = tx.send(Task::Connected(r, t));
@@ -682,103 +692,7 @@ fn stream(ctx: &egui::Context, live: &mut Live, target: &Target) -> Option<Strin
     }
 
     if !live.fullscreen {
-        egui::TopBottomPanel::top("bar").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                // The computer: a menu of the paired ones, to switch quickly.
-                egui::ComboBox::from_id_salt("machine")
-                    .selected_text(RichText::new(&live.mac_name).strong())
-                    .show_ui(ui, |ui| {
-                        for (id, name, online, this) in live.machines.clone() {
-                            let label = if this || online { RichText::new(&name) } else { RichText::new(format!("{name} (not found)")).weak() };
-                            if ui.selectable_label(this, label).clicked() && !this {
-                                live.switch_to = Some(format!("connect:{id}"));
-                            }
-                        }
-                    });
-                let cur = if live.active.get("desktop").is_some() { "Desktop".to_string() } else {
-                    let id = live.active["window"]["_0"].as_u64();
-                    live.windows.iter().find(|w| w["id"].as_u64() == id)
-                        .map(|w| w["title"].as_str().unwrap_or("Window").to_string()).unwrap_or("—".into())
-                };
-                egui::ComboBox::from_id_salt("source").selected_text(cur).width(200.0).show_ui(ui, |ui| {
-                    if ui.selectable_label(live.active.get("desktop").is_some(), "Desktop").clicked() {
-                        live.session.select(json!({"desktop": {}}));
-                    }
-                    for w in live.windows.clone() {
-                        let id = w["id"].as_u64().unwrap_or(0);
-                        let label = format!("{} — {}", w["appName"].as_str().unwrap_or(""), w["title"].as_str().unwrap_or(""));
-                        if ui.selectable_label(live.active["window"]["_0"].as_u64() == Some(id), label).clicked() {
-                            live.session.select(json!({"window": {"_0": id}}));
-                        }
-                    }
-                });
-                if let Some(st) = live.settings.clone() {
-                    let s = &st["settings"];
-                    let bitrate = s["bitrate"].as_i64().unwrap_or(0);
-                    let name = PRESETS.iter().find(|p| p.0 == bitrate).map(|p| p.1.to_string())
-                        .unwrap_or(format!("{} Mbps", bitrate / 1_000_000));
-                    egui::ComboBox::from_id_salt("quality").selected_text(name).show_ui(ui, |ui| {
-                        for (b, n) in PRESETS {
-                            if ui.selectable_label(b == bitrate, format!("{n} — {} Mbps", b / 1_000_000)).clicked() {
-                                setting(live, "bitrate", json!(b));
-                            }
-                        }
-                    });
-                    let retina = s["captureScale"].as_f64().unwrap_or(2.0) >= 1.5;
-                    if ui.selectable_label(retina, "Sharp").on_hover_text("Full resolution (Retina). Off: half, for slow links.").clicked() {
-                        setting(live, "captureScale", json!(if retina { 1.0 } else { 2.0 }));
-                    }
-                    let z = zoom();
-                    egui::ComboBox::from_id_salt("zoom")
-                        .selected_text(ZOOMS.iter().find(|x| x.0 == z).map_or(format!("{z}%"), |x| x.1.to_string()))
-                        .width(60.0)
-                        .show_ui(ui, |ui| {
-                            for (v, name) in ZOOMS {
-                                if ui.selectable_label(v == z, name).clicked() {
-                                    set_zoom(v);
-                                }
-                            }
-                        })
-                        .response.on_hover_text("Zoom. 100%: one remote pixel per screen pixel. Above Fit, move the pointer to an edge to see more.");
-                    let fps120 = live.fps == 120;
-                    if ui.selectable_label(fps120, "120 fps").clicked() {
-                        live.fps = if fps120 { 60 } else { 120 };
-                        if !fps120 && s["maxFPS"].as_i64().unwrap_or(60) < 120 {
-                            setting(live, "maxFPS", json!(120));
-                        }
-                    }
-                    if st["virtualDisplayAvailable"] == true {
-                        if st["pixelMatch"] == true && ui.selectable_label(live.match_screen, "Match this screen")
-                            .on_hover_text("Full screen, on a virtual screen with exactly this monitor's resolution").clicked() {
-                            toggle_match(ctx, live);
-                        }
-                        let vd = s["virtualDisplay"] == true;
-                        if ui.selectable_label(vd, "Fit screen").on_hover_text("Desktop on a virtual screen sized to this window").clicked() {
-                            setting(live, "virtualDisplay", json!(!vd));
-                        }
-                    }
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("Disconnect").clicked() {
-                        leave = Some(String::new());
-                    }
-                    if live.files_ok && ui.button("Get copied files")
-                        .on_hover_text(format!("Copy files on {} (Ctrl+C in Files), then click here: they come to your \
-                                                Downloads folder. To send files there, drop them on this window.", live.mac_name))
-                        .clicked() {
-                        live.session.request_files();
-                        live.note = Some(("Asking for the copied files…".into(), Instant::now()));
-                    }
-                    // A Mac has its own full screen button (the green one), so no second one here.
-                    if !cfg!(target_os = "macos") && ui.button("Full screen").on_hover_text("Ctrl+Alt+Shift+F leaves it").clicked() {
-                        live.fullscreen = true;
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(true));
-                    }
-                    let sh = live.shared.lock().unwrap();
-                    ui.label(RichText::new(format!("{}×{} · {} · {:.0} ms", sh.size.0, sh.size.1, sh.decoder, live.rtt)).weak());
-                });
-            });
-        });
+        egui::TopBottomPanel::top("bar").show(ctx, |ui| bar(ctx, ui, live, &mut leave));
     }
 
     egui::CentralPanel::default().frame(egui::Frame::none().fill(Color32::BLACK)).show(ctx, |ui| {
@@ -834,11 +748,152 @@ fn stream(ctx: &egui::Context, live: &mut Live, target: &Target) -> Option<Strin
         handle_input(ctx, live, rect, resp.hovered() || resp.dragged(), &mut leave);
     });
 
+    // Full screen hides the bar. Holding the pointer at the top edge brings it back over the
+    // picture, as in the Mac's Screen Sharing; it goes away when the pointer leaves it. Over the
+    // picture, not above it: a smaller picture would resize a host's virtual screen.
+    if live.fullscreen && fullscreen_bar_wanted(ctx, live) {
+        // On a Mac the same edge slides down the menu bar, which would cover the bar.
+        let top = if cfg!(target_os = "macos") { MAC_MENU_BAR } else { 0.0 };
+        let width = ctx.screen_rect().width();
+        let r = egui::Area::new(egui::Id::new("fullscreen-bar"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(Pos2::new(0.0, top))
+            .show(ctx, |ui| {
+                egui::Frame::side_top_panel(ui.style()).show(ui, |ui| {
+                    ui.set_width(width - 16.0);
+                    bar(ctx, ui, live, &mut leave);
+                });
+            });
+        live.bar_bottom = r.response.rect.bottom();
+    }
+
     if live.scroll_open.is_some_and(|t| t.elapsed() > Duration::from_millis(150)) {
         live.scroll_open = None;
         live.session.input(input::scroll_phase("ended", live.last_pos.0, live.last_pos.1));
     }
     leave.map(|s| if s.is_empty() { String::new() } else { s })
+}
+
+/// The stream's controls: computer, source, quality, zoom and the rest.
+fn bar(ctx: &egui::Context, ui: &mut egui::Ui, live: &mut Live, leave: &mut Option<String>) {
+    ui.horizontal(|ui| {
+        // The computer: a menu of the paired ones, to switch quickly.
+        egui::ComboBox::from_id_salt("machine")
+            .selected_text(RichText::new(&live.mac_name).strong())
+            .show_ui(ui, |ui| {
+                for (id, name, online, this) in live.machines.clone() {
+                    let label = if this || online { RichText::new(&name) } else { RichText::new(format!("{name} (not found)")).weak() };
+                    if ui.selectable_label(this, label).clicked() && !this {
+                        live.switch_to = Some(format!("connect:{id}"));
+                    }
+                }
+            });
+        let cur = if live.active.get("desktop").is_some() { "Desktop".to_string() } else {
+            let id = live.active["window"]["_0"].as_u64();
+            live.windows.iter().find(|w| w["id"].as_u64() == id)
+                .map(|w| w["title"].as_str().unwrap_or("Window").to_string()).unwrap_or("—".into())
+        };
+        egui::ComboBox::from_id_salt("source").selected_text(cur).width(200.0).show_ui(ui, |ui| {
+            if ui.selectable_label(live.active.get("desktop").is_some(), "Desktop").clicked() {
+                live.session.select(json!({"desktop": {}}));
+            }
+            for w in live.windows.clone() {
+                let id = w["id"].as_u64().unwrap_or(0);
+                let label = format!("{} — {}", w["appName"].as_str().unwrap_or(""), w["title"].as_str().unwrap_or(""));
+                if ui.selectable_label(live.active["window"]["_0"].as_u64() == Some(id), label).clicked() {
+                    live.session.select(json!({"window": {"_0": id}}));
+                }
+            }
+        });
+        if let Some(st) = live.settings.clone() {
+            let s = &st["settings"];
+            let bitrate = s["bitrate"].as_i64().unwrap_or(0);
+            let name = PRESETS.iter().find(|p| p.0 == bitrate).map(|p| p.1.to_string())
+                .unwrap_or(format!("{} Mbps", bitrate / 1_000_000));
+            egui::ComboBox::from_id_salt("quality").selected_text(name).show_ui(ui, |ui| {
+                for (b, n) in PRESETS {
+                    if ui.selectable_label(b == bitrate, format!("{n} — {} Mbps", b / 1_000_000)).clicked() {
+                        setting(live, "bitrate", json!(b));
+                    }
+                }
+            });
+            let retina = s["captureScale"].as_f64().unwrap_or(2.0) >= 1.5;
+            if ui.selectable_label(retina, "Sharp").on_hover_text("Full resolution (Retina). Off: half, for slow links.").clicked() {
+                setting(live, "captureScale", json!(if retina { 1.0 } else { 2.0 }));
+            }
+            let z = zoom();
+            egui::ComboBox::from_id_salt("zoom")
+                .selected_text(ZOOMS.iter().find(|x| x.0 == z).map_or(format!("{z}%"), |x| x.1.to_string()))
+                .width(60.0)
+                .show_ui(ui, |ui| {
+                    for (v, name) in ZOOMS {
+                        if ui.selectable_label(v == z, name).clicked() {
+                            set_zoom(v);
+                        }
+                    }
+                })
+                .response.on_hover_text("Zoom. 100%: one remote pixel per screen pixel. Above Fit, move the pointer to an edge to see more.");
+            let fps120 = live.fps == 120;
+            if ui.selectable_label(fps120, "120 fps").clicked() {
+                live.fps = if fps120 { 60 } else { 120 };
+                if !fps120 && s["maxFPS"].as_i64().unwrap_or(60) < 120 {
+                    setting(live, "maxFPS", json!(120));
+                }
+            }
+            if st["virtualDisplayAvailable"] == true {
+                if st["pixelMatch"] == true && ui.selectable_label(live.match_screen, "Match this screen")
+                    .on_hover_text("Full screen, on a virtual screen with exactly this monitor's resolution").clicked() {
+                    toggle_match(ctx, live);
+                }
+                let vd = s["virtualDisplay"] == true;
+                if ui.selectable_label(vd, "Fit screen").on_hover_text("Desktop on a virtual screen sized to this window").clicked() {
+                    setting(live, "virtualDisplay", json!(!vd));
+                }
+            }
+        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.button("Disconnect").clicked() {
+                *leave = Some(String::new());
+            }
+            if live.files_ok && ui.button("Get copied files")
+                .on_hover_text(format!("Copy files on {} (Ctrl+C in Files), then click here: they come to your \
+                                        Downloads folder. To send files there, drop them on this window.", live.mac_name))
+                .clicked() {
+                live.session.request_files();
+                live.note = Some(("Asking for the copied files…".into(), Instant::now()));
+            }
+            // A Mac has its own full screen button (the green one), so no second one here.
+            if !cfg!(target_os = "macos") && ui.button("Full screen").on_hover_text("Ctrl+Alt+Shift+F leaves it").clicked() {
+                live.fullscreen = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(true));
+            }
+            let sh = live.shared.lock().unwrap();
+            ui.label(RichText::new(format!("{}×{} · {} · {:.0} ms", sh.size.0, sh.size.1, sh.decoder, live.rtt)).weak());
+        });
+    });
+}
+
+/// Whether the full screen bar shows: after the pointer rests BAR_REVEAL at the top edge, and
+/// while it stays on the bar (or one of the bar's menus is open).
+fn fullscreen_bar_wanted(ctx: &egui::Context, live: &mut Live) -> bool {
+    let y = ctx.input(|i| i.pointer.hover_pos()).map(|p| p.y);
+    if live.bar_shown {
+        let menu_open = ctx.memory(|m| m.any_popup_open());
+        live.bar_shown = menu_open || y.is_some_and(|y| y <= live.bar_bottom + 24.0);
+        if !live.bar_shown {
+            live.bar_hold = None;
+        }
+    } else if y.is_some_and(|y| y <= 2.0) {
+        let since = *live.bar_hold.get_or_insert_with(Instant::now);
+        if since.elapsed() >= BAR_REVEAL {
+            live.bar_shown = true;
+        } else {
+            ctx.request_repaint_after(Duration::from_millis(50));
+        }
+    } else {
+        live.bar_hold = None;
+    }
+    live.bar_shown
 }
 
 fn handle_input(ctx: &egui::Context, live: &mut Live, rect: Rect, over: bool, leave: &mut Option<String>) {
