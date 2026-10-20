@@ -646,6 +646,11 @@ class Host:
             log.warning("fit screen: could not put the monitors back: %s", e.message)
 
     def _dmabuf_failed(self, why):
+        p = self.pipeline
+        if p is not None and (p.encoder == video.VULKAN or p.encoder_fault):
+            # Vulkan encoding failed, not the GPU frames: the next try uses the other encoders.
+            video.vulkan_failed(why)
+            return
         if getattr(self, "using_dmabuf", False) and not self.dmabuf_bad:
             self.dmabuf_bad = True
             log.warning("GPU frames (DMA-BUF) did not work (%s); copying frames instead from now on", why)

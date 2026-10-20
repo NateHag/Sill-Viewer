@@ -3,8 +3,14 @@
 The device wants HEVC Main 8-bit 4:2:0 without B-frames, as length-prefixed NAL units (hvcC
 style), with VPS/SPS/PPS sent apart (kind 0) before each keyframe. Encoders are tried in order
 (NVIDIA, then VA-API, then x265 in software); one that fails before its first frame is skipped.
+On NVIDIA, Vulkan video (sill-vkenc, FFmpeg's hevc_vulkan) comes first: NVENC through CUDA holds the
+GPU at P2 and full clocks while it encodes, Vulkan lets it idle at P5. Any failure of it falls back
+to the encoders above for the rest of the run.
 """
 import logging
+import os
+import struct
+import subprocess
 import threading
 import time
 
@@ -37,7 +43,54 @@ def is_bad(enc, fps):
         return False
     return True
 
-NAL_VPS, NAL_SPS, NAL_PPS, NAL_AUD = 32, 33, 34, 35
+NAL_VPS, NAL_SPS, NAL_PPS, NAL_AUD, NAL_FD = 32, 33, 34, 35, 38
+
+VULKAN = "hevc_vulkan"
+VKENC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vkenc", "sill-vkenc")
+_vulkan = {"device": None, "checked": False, "off": None}   # off: why Vulkan is not used, once it failed
+
+
+def _nvidia_display_gpu():
+    """Name of the NVIDIA GPU with a display attached (else the first), or None without NVIDIA."""
+    try:
+        out = subprocess.run(["nvidia-smi", "--query-gpu=name,display_attached", "--format=csv,noheader"],
+                             capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    gpus = [[x.strip() for x in line.split(",")] for line in out.splitlines() if "," in line]
+    for name, attached in gpus:
+        if attached.lower() == "yes":
+            return name
+    return gpus[0][0] if gpus else None
+
+
+def vulkan_device():
+    """The Vulkan device to encode on, when this is NVIDIA and sill-vkenc works there, else None.
+    Checked once (a short test encode), then remembered."""
+    if _vulkan["off"]:
+        return None
+    if not _vulkan["checked"]:
+        _vulkan["checked"] = True
+        name = _nvidia_display_gpu() if os.access(VKENC, os.X_OK) else None
+        if name:
+            try:
+                r = subprocess.run([VKENC, name, "probe"], capture_output=True, text=True, timeout=15)
+                if r.returncode == 0:
+                    _vulkan["device"] = name
+                else:
+                    last = r.stderr.strip().splitlines()[-1:]
+                    log.info("Vulkan HEVC not used: %s", last[0] if last else f"exit {r.returncode}")
+            except (OSError, subprocess.SubprocessError) as e:
+                log.info("Vulkan HEVC not used: %s", e)
+        if _vulkan["device"]:
+            log.info("Vulkan HEVC works on %s", _vulkan["device"])
+    return _vulkan["device"]
+
+
+def vulkan_failed(why):
+    if not _vulkan["off"]:
+        _vulkan["off"] = why
+        log.warning("Vulkan HEVC failed (%s); using the other encoders from now on", why)
 
 
 def init():
@@ -157,8 +210,15 @@ class Pipeline:
         self.last_key_request = 0.0
         self.lock = threading.Lock()
         self.stopped = False
+        self.proc = None                # sill-vkenc, when encoding through Vulkan
+        self.write_lock = threading.Lock()
+        self.last_raw = None
+        self.key_pending = False
+        self.encoder_fault = False      # this stream failed because of Vulkan, not the screen
 
     def candidates(self):
+        if self.forced_encoder == VULKAN:
+            return [VULKAN] if vulkan_device() else []
         if self.forced_encoder:
             return [self.forced_encoder]
         installed = [e for e in ENCODERS if have(e)]
@@ -169,6 +229,8 @@ class Pipeline:
             for e in installed:
                 _bad_encoders.pop((e, self.fps), None)
             found = installed
+        if self.forced_encoder is None and vulkan_device():
+            return [VULKAN] + (found[:1] if self.gpu_source else found)
         return found[:1] if self.gpu_source else found
 
     def start(self):
@@ -176,6 +238,10 @@ class Pipeline:
         gop = self.fps * 4
         errors = []
         for enc in self.candidates():
+            if enc == VULKAN:
+                if self._start_vulkan(kbps, gop, errors):
+                    return True
+                continue
             enc_desc = encoder_description(enc, kbps, self.fps, gop, self.speed)
             if enc_desc is None:
                 continue
@@ -210,6 +276,142 @@ class Pipeline:
             return True
         raise RuntimeError("no HEVC encoder works: " + "; ".join(errors or ["none installed (gst-inspect-1.0 | grep 265enc)"]))
 
+    def _start_vulkan(self, kbps, gop, errors):
+        """Frames to NV12 in memory, then through sill-vkenc. GL frames (a virtual screen's DMA-BUFs)
+        convert in GL; no CUDA, which alone holds an NVIDIA GPU at P2. Frames already in memory
+        convert on the CPU, as for VA-API."""
+        size = f",width={self.enc_width},height={self.enc_height}" if self.enc_width and self.enc_height else ""
+        if "GLMemory" in self.source_desc and "gldownload" not in self.source_desc:
+            convert = (f"glcolorscale ! glcolorconvert ! video/x-raw(memory:GLMemory),format=NV12{size} ! "
+                       f"gldownload ! video/x-raw,format=NV12")
+        else:
+            convert = f"videoconvert n-threads=4 ! videoscale ! video/x-raw,format=NV12{size}"
+        desc = (f"{self.source_desc} ! capsfilter name=srccaps ! queue max-size-buffers=1 leaky=downstream ! "
+                f"{convert} ! appsink name=sink emit-signals=true sync=false max-buffers=1 drop=true")
+        try:
+            pipeline = Gst.parse_launch(desc)
+        except GLib.Error as e:
+            errors.append(f"{VULKAN}: {e.message}")
+            vulkan_failed(e.message)
+            return False
+        try:
+            proc = subprocess.Popen([VKENC, vulkan_device(), str(self.fps), str(kbps), str(gop)],
+                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        except OSError as e:
+            errors.append(f"{VULKAN}: {e}")
+            vulkan_failed(str(e))
+            return False
+        self.encoder = VULKAN
+        self.pipeline = pipeline
+        self.proc = proc
+        self.sink = pipeline.get_by_name("sink")
+        self.sink.connect("new-sample", self._raw_sample)
+        pad = pipeline.get_by_name("srccaps").get_static_pad("src")
+        pad.add_probe(Gst.PadProbeType.BUFFER, self._count_captured)
+        bus = pipeline.get_bus()
+        bus.add_signal_watch()
+        bus.connect("message", self._message)
+        threading.Thread(target=self._read_aus, args=(proc,), daemon=True).start()
+        threading.Thread(target=self._read_errors, args=(proc,), daemon=True).start()
+        self.started = time.monotonic()
+        log.info("pipeline: %s ! sill-vkenc on %s", desc, vulkan_device())
+        if pipeline.set_state(Gst.State.PLAYING) == Gst.StateChangeReturn.FAILURE:
+            msg = bus.pop_filtered(Gst.MessageType.ERROR)
+            why = msg.parse_error()[0].message if msg else "could not start"
+            errors.append(f"{VULKAN}: {why}")
+            vulkan_failed(why)
+            self._teardown()
+            return False
+        log.info("encoding with %s (Vulkan) at %d kbps, %d fps", VULKAN, kbps, self.fps)
+        return True
+
+    def _raw_sample(self, sink):
+        """An NV12 frame for sill-vkenc. The last one is kept: a keyframe request re-sends it at once,
+        so a viewer who joins a still screen gets a picture now, not at the next screen change."""
+        sample = sink.emit("pull-sample")
+        if sample is None:
+            return Gst.FlowReturn.OK
+        caps = sample.get_caps()
+        info = GstVideo.VideoInfo.new_from_caps(caps) if caps else None
+        buf = sample.get_buffer()
+        if info is None:
+            return Gst.FlowReturn.OK
+        ok, m = buf.map(Gst.MapFlags.READ)
+        if not ok:
+            return Gst.FlowReturn.OK
+        try:
+            data = bytes(m.data)
+        finally:
+            buf.unmap(m)
+        meta = GstVideo.buffer_get_video_meta(buf)
+        if meta is not None:
+            strides, offsets = list(meta.stride), list(meta.offset)
+        else:
+            strides, offsets = list(info.stride), list(info.offset)
+        self._note_capture_size()
+        if offsets[0]:
+            data = data[offsets[0]:]
+        frame = (info.width, info.height, strides[0], strides[1], offsets[1] - offsets[0], data)
+        with self.lock:
+            self.last_raw = frame
+            key, self.key_pending = self.key_pending, False
+        self._write_frame(frame, key)
+        return Gst.FlowReturn.OK
+
+    def _write_frame(self, frame, key):
+        proc = self.proc
+        if proc is None:
+            return
+        w, h, sy, suv, ouv, data = frame
+        try:
+            with self.write_lock:
+                proc.stdin.write(struct.pack("7I", 1 if key else 0, w, h, sy, suv, ouv, len(data)))
+                proc.stdin.write(data)
+                proc.stdin.flush()
+        except (BrokenPipeError, ValueError, OSError):
+            pass   # the reader sees it exit and reports it
+
+    def _read_aus(self, proc):
+        out = proc.stdout
+        while True:
+            head = out.read(8)
+            if len(head) < 8:
+                break
+            size, _flags = struct.unpack("2I", head)
+            data = out.read(size)
+            if len(data) < size:
+                break
+            if not self.stopped:
+                self._emit(data)
+        code = proc.wait()
+        if proc is self.proc and not self.stopped:
+            GLib.idle_add(self._vulkan_died, code)
+
+    def _read_errors(self, proc):
+        for line in proc.stderr:
+            line = line.decode(errors="replace").strip()
+            if line and "not a conformant Vulkan implementation" not in line:
+                self.vk_error = line
+                log.warning("%s", line)
+
+    def _vulkan_died(self, code):
+        if self.stopped or self.proc is None:
+            return False
+        why = getattr(self, "vk_error", None) or f"sill-vkenc exited ({code})"
+        vulkan_failed(why)
+        self.encoder_fault = True
+        self._teardown()
+        self.on_failed(why)
+        return False
+
+    def _note_capture_size(self):
+        if self.capture_size is None and self.pipeline is not None:
+            caps = self.pipeline.get_by_name("srccaps").get_static_pad("src").get_current_caps()
+            if caps:
+                s = caps.get_structure(0)
+                self.capture_size = (s.get_value("width"), s.get_value("height"))
+                log.info("capture size %dx%d", *self.capture_size)
+
     def _count_captured(self, _pad, _info):
         self.captured += 1
         return Gst.PadProbeReturn.OK
@@ -220,6 +422,16 @@ class Pipeline:
             self.pipeline.set_state(Gst.State.NULL)
         self.pipeline = None
         self.sink = None
+        proc, self.proc = self.proc, None
+        if proc is not None:
+            try:
+                proc.stdin.close()
+            except OSError:
+                pass
+            try:
+                proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                proc.kill()
 
     def stop(self):
         self.stopped = True
@@ -234,7 +446,10 @@ class Pipeline:
             src = msg.src
             factory = src.get_factory().get_name() if isinstance(src, Gst.Element) and src.get_factory() else ""
             encoder_side = factory in ENCODERS or factory in ("cudaupload", "cudaconvertscale", "vapostproc")
-            if self.frames == 0 and self.encoder and not self.forced_encoder and encoder_side and not self.gpu_source:
+            if self.encoder == VULKAN and self.frames == 0:
+                vulkan_failed(err.message)
+                self.encoder_fault = True
+            elif self.frames == 0 and self.encoder and not self.forced_encoder and encoder_side and not self.gpu_source:
                 if time.monotonic() - self.started < 10:
                     log.warning("encoder %s failed before its first frame; trying the next one", self.encoder)
                     mark_bad(self.encoder, self.fps)
@@ -251,6 +466,13 @@ class Pipeline:
                 return
             self.last_key_request = now
             sink = self.sink
+            if self.proc is not None:
+                frame = self.last_raw
+                self.key_pending = frame is None
+        if self.proc is not None:
+            if frame is not None:
+                self._write_frame(frame, True)
+            return
         ev = GstVideo.video_event_new_upstream_force_key_unit(Gst.CLOCK_TIME_NONE, True, 0)
         sink.send_event(ev)
 
@@ -266,19 +488,19 @@ class Pipeline:
             data = bytes(info.data)
         finally:
             buf.unmap(info)
-        if self.capture_size is None and self.pipeline is not None:
-            caps = self.pipeline.get_by_name("srccaps").get_static_pad("src").get_current_caps()
-            if caps:
-                s = caps.get_structure(0)
-                self.capture_size = (s.get_value("width"), s.get_value("height"))
-                log.info("capture size %dx%d", *self.capture_size)
+        self._note_capture_size()
+        self._emit(data)
+        return Gst.FlowReturn.OK
+
+    def _emit(self, data):
+        """One Annex B access unit to on_au, as length-prefixed NAL units with the parameter sets apart."""
         params, out, key = [], bytearray(), False
         for nal in split_annexb(data):
             t = (nal[0] >> 1) & 0x3F
             if t in (NAL_VPS, NAL_SPS, NAL_PPS):
                 params.append((t, nal))
                 continue
-            if t == NAL_AUD:
+            if t in (NAL_AUD, NAL_FD):
                 continue
             if 16 <= t <= 21:
                 key = True
@@ -288,7 +510,6 @@ class Pipeline:
             params.sort(key=lambda p: p[0])
             self.param_sets = [n for _, n in params]
         if not out:
-            return Gst.FlowReturn.OK
+            return
         self.frames += 1
         self.on_au(self.param_sets if key else None, bytes(out), key)
-        return Gst.FlowReturn.OK
