@@ -22,6 +22,8 @@ use crate::tray::PRESETS;
 static ZOOM: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 /// How long the pointer rests at the top edge in full screen before the bar comes back.
 const BAR_REVEAL: Duration = Duration::from_millis(300);
+/// The pointer left the window this close to the top (points): it went out through the top edge.
+const TOP_EXIT: f32 = 24.0;
 /// Room for the Mac's menu bar (taller on a MacBook with a notch), which the same edge brings down.
 const MAC_MENU_BAR: f32 = 38.0;
 const ZOOMS: [(u32, &str); 6] = [(0, "Fit"), (100, "100%"), (125, "125%"), (150, "150%"), (175, "175%"), (200, "200%")];
@@ -92,6 +94,7 @@ struct Live {
     bar_hold: Option<Instant>,
     bar_shown: bool,
     bar_bottom: f32,
+    bar_last_y: f32,
 }
 
 enum Screen {
@@ -313,7 +316,7 @@ impl App {
                     settings: None, rtt: 0.0, sent_viewport: (0.0, 0.0, 0, 0, 0, 0), match_screen: false, sent_mods: Modifiers::NONE,
                     buttons_down: vec![], scroll_open: None, last_pos: (0.5, 0.5), token: 0, fps: 60,
                     cursor_in_video: false, fullscreen: false, os_fullscreen: None,
-                    bar_hold: None, bar_shown: false, bar_bottom: 0.0,
+                    bar_hold: None, bar_shown: false, bar_bottom: 0.0, bar_last_y: f32::MAX,
                 })
             });
             let _ = tx.send(Task::Connected(r, t));
@@ -873,16 +876,24 @@ fn bar(ctx: &egui::Context, ui: &mut egui::Ui, live: &mut Live, leave: &mut Opti
     });
 }
 
-/// Whether the full screen bar shows: after the pointer rests BAR_REVEAL at the top edge, and
-/// while it stays on the bar (or one of the bar's menus is open).
+/// Whether the full screen bar shows: after the pointer rests BAR_REVEAL at the top edge, or at
+/// once when it leaves the window through the top (on a Mac the menu bar slides down there and
+/// takes the pointer, so the window never sees it rest at the edge); and while it stays on the
+/// bar, above it, or one of the bar's menus is open.
 fn fullscreen_bar_wanted(ctx: &egui::Context, live: &mut Live) -> bool {
     let y = ctx.input(|i| i.pointer.hover_pos()).map(|p| p.y);
+    let last_y = live.bar_last_y;
+    if let Some(y) = y {
+        live.bar_last_y = y;
+    }
     if live.bar_shown {
         let menu_open = ctx.memory(|m| m.any_popup_open());
-        live.bar_shown = menu_open || y.is_some_and(|y| y <= live.bar_bottom + 24.0);
+        live.bar_shown = menu_open || y.unwrap_or(last_y) <= live.bar_bottom + 24.0;
         if !live.bar_shown {
             live.bar_hold = None;
         }
+    } else if y.is_none() && last_y <= TOP_EXIT {
+        live.bar_shown = true;
     } else if y.is_some_and(|y| y <= 2.0) {
         let since = *live.bar_hold.get_or_insert_with(Instant::now);
         if since.elapsed() >= BAR_REVEAL {
