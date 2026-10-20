@@ -63,6 +63,7 @@ def check():
     ok(video.have("h265parse"), "HEVC parser (gstreamer1.0-plugins-bad)")
     vk = video.vulkan_device()
     ok(True, f"Vulkan HEVC (sill-vkenc): {'works on ' + vk if vk else 'not used (needs NVIDIA and FFmpeg hevc_vulkan)'}")
+    ok(True, "Encode on (tray): Auto, " + ", ".join(label for _, label in video.encode_gpus()))
     encs = [e for e in video.ENCODERS if video.have(e)]
     hw = [e for e in encs if e != "x265enc"]
     ok(bool(hw), "hardware HEVC encoder: " + (", ".join(hw) if hw else "none found (software x265 only)"))
