@@ -61,6 +61,8 @@ def check():
             ok(False, f"monitors: {e.message}")
     ok(video.have("pipewiresrc"), "PipeWire capture (gstreamer1.0-pipewire)")
     ok(video.have("h265parse"), "HEVC parser (gstreamer1.0-plugins-bad)")
+    vk = video.vulkan_device()
+    ok(True, f"Vulkan HEVC (sill-vkenc): {'works on ' + vk if vk else 'not used (needs NVIDIA and FFmpeg hevc_vulkan)'}")
     encs = [e for e in video.ENCODERS if video.have(e)]
     hw = [e for e in encs if e != "x265enc"]
     ok(bool(hw), "hardware HEVC encoder: " + (", ".join(hw) if hw else "none found (software x265 only)"))
@@ -111,7 +113,7 @@ def main():
     ap.add_argument("--port", type=int, default=7456, help="TCP port (default 7456)")
     ap.add_argument("--open", action="store_true",
                     help="no pairing: any device on the network may connect (still encrypted)")
-    ap.add_argument("--encoder", help="force one GStreamer encoder, e.g. nvh265enc or x265enc")
+    ap.add_argument("--encoder", help="force one encoder, e.g. hevc_vulkan, nvh265enc or x265enc")
     ap.add_argument("--cursor", choices=["auto", "hidden", "embedded"], default="auto",
                     help="auto (default): in the video for iPhone and iPad, left out for desktop viewers, which "
                          "show your own cursor; embedded: always in the video; hidden: never")
