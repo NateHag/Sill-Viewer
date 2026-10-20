@@ -81,7 +81,8 @@ class Tray:
                 "devices": [(d["key"], d["name"]) for d in st.get("devices", [])],
                 "settings": s.get("settings"), "vd": s.get("virtualDisplayAvailable"),
                 "stream": s.get("stream"), "name": st.get("name"),
-                "build": st.get("build"), "update": st.get("update"), "canUpdate": st.get("canUpdate")}
+                "build": st.get("build"), "update": st.get("update"), "canUpdate": st.get("canUpdate"),
+                "gpu": st.get("encodeGPU"), "gpus": st.get("encodeGPUs")}
 
     # --- the menu ----------------------------------------------------------------------------------
     def item(self, menu, label, callback=None, sensitive=True):
@@ -155,6 +156,11 @@ class Tray:
         sub = self.submenu(menu, "Resolution")
         self.radio(sub, [(2.0, "Sharp (full resolution)"), (1.0, "Standard (half, for slow links)")],
                    s.get("captureScale"), lambda v: self.set(captureScale=v))
+        gpus = st.get("encodeGPUs") or []
+        if gpus:
+            sub = self.submenu(menu, "Encode on")
+            self.radio(sub, [("auto", "Auto")] + [tuple(g) for g in gpus], st.get("encodeGPU", "auto"),
+                       lambda v: self.set(encodeGPU=v))
         if st.get("settings", {}).get("virtualDisplayAvailable"):
             vd = Gtk.CheckMenuItem(label="Desktop on a virtual screen sized to the device")
             vd.set_active(bool(s.get("virtualDisplay")))

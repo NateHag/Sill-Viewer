@@ -47,50 +47,81 @@ NAL_VPS, NAL_SPS, NAL_PPS, NAL_AUD, NAL_FD = 32, 33, 34, 35, 38
 
 VULKAN = "hevc_vulkan"
 VKENC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vkenc", "sill-vkenc")
-_vulkan = {"device": None, "checked": False, "off": None}   # off: why Vulkan is not used, once it failed
+_probe_lock = threading.RLock()
+_nvidia = None        # NVIDIA GPU names, the one with the display first
+_vk_ok = {}           # GPU name -> whether a test encode through Vulkan worked
+_vk_off = {}          # GPU name -> why Vulkan failed while streaming: not used again this run
+_gpus = None          # the choices for "Encode on"
 
 
-def _nvidia_display_gpu():
-    """Name of the NVIDIA GPU with a display attached (else the first), or None without NVIDIA."""
-    try:
-        out = subprocess.run(["nvidia-smi", "--query-gpu=name,display_attached", "--format=csv,noheader"],
-                             capture_output=True, text=True, timeout=5).stdout
-    except (OSError, subprocess.SubprocessError):
-        return None
-    gpus = [[x.strip() for x in line.split(",")] for line in out.splitlines() if "," in line]
-    for name, attached in gpus:
-        if attached.lower() == "yes":
-            return name
-    return gpus[0][0] if gpus else None
+def _nvidia_gpus():
+    global _nvidia
+    with _probe_lock:
+        if _nvidia is None:
+            try:
+                out = subprocess.run(["nvidia-smi", "--query-gpu=name,display_attached", "--format=csv,noheader"],
+                                     capture_output=True, text=True, timeout=5).stdout
+            except (OSError, subprocess.SubprocessError):
+                out = ""
+            gpus = [[x.strip() for x in line.split(",")] for line in out.splitlines() if "," in line]
+            _nvidia = [n for n, a in gpus if a.lower() == "yes"] + [n for n, a in gpus if a.lower() != "yes"]
+        return _nvidia
+
+
+def vulkan_works(name):
+    """Whether sill-vkenc encodes on GPU `name`: a short test encode, once, then remembered."""
+    with _probe_lock:
+        if name in _vk_off:
+            return False
+        if name not in _vk_ok:
+            ok = False
+            if os.access(VKENC, os.X_OK):
+                try:
+                    r = subprocess.run([VKENC, name, "probe"], capture_output=True, text=True, timeout=15)
+                    ok = r.returncode == 0
+                    if not ok:
+                        last = r.stderr.strip().splitlines()[-1:]
+                        log.info("Vulkan HEVC not used on %s: %s", name, last[0] if last else f"exit {r.returncode}")
+                except (OSError, subprocess.SubprocessError) as e:
+                    log.info("Vulkan HEVC not used on %s: %s", name, e)
+            _vk_ok[name] = ok
+            if ok:
+                log.info("Vulkan HEVC works on %s", name)
+        return _vk_ok[name]
 
 
 def vulkan_device():
-    """The Vulkan device to encode on, when this is NVIDIA and sill-vkenc works there, else None.
-    Checked once (a short test encode), then remembered."""
-    if _vulkan["off"]:
-        return None
-    if not _vulkan["checked"]:
-        _vulkan["checked"] = True
-        name = _nvidia_display_gpu() if os.access(VKENC, os.X_OK) else None
-        if name:
-            try:
-                r = subprocess.run([VKENC, name, "probe"], capture_output=True, text=True, timeout=15)
-                if r.returncode == 0:
-                    _vulkan["device"] = name
-                else:
-                    last = r.stderr.strip().splitlines()[-1:]
-                    log.info("Vulkan HEVC not used: %s", last[0] if last else f"exit {r.returncode}")
-            except (OSError, subprocess.SubprocessError) as e:
-                log.info("Vulkan HEVC not used: %s", e)
-        if _vulkan["device"]:
-            log.info("Vulkan HEVC works on %s", _vulkan["device"])
-    return _vulkan["device"]
+    """For Auto: the NVIDIA GPU with the display, when Vulkan encoding works there, else None."""
+    gpus = _nvidia_gpus()
+    return gpus[0] if gpus and vulkan_works(gpus[0]) else None
 
 
-def vulkan_failed(why):
-    if not _vulkan["off"]:
-        _vulkan["off"] = why
-        log.warning("Vulkan HEVC failed (%s); using the other encoders from now on", why)
+def vulkan_failed(name, why):
+    if name and name not in _vk_off:
+        _vk_off[name] = why
+        log.warning("Vulkan HEVC on %s failed (%s); using the other encoders from now on", name, why)
+
+
+def _is_va(name):
+    """A GStreamer VA-API HEVC encoder: vah265enc for the first GPU, varenderD129h265enc and so on."""
+    return name.startswith("va") and name.endswith("h265enc") and name != "vaapih265enc"
+
+
+def encode_gpus():
+    """The choices for "Encode on", as [(id, label)]: each NVIDIA GPU where Vulkan encoding works
+    ("vulkan:<name>"), and each GPU with a VA-API HEVC encoder, AMD or Intel ("va:<element>")."""
+    global _gpus
+    with _probe_lock:
+        if _gpus is None:
+            found = [(f"vulkan:{n}", n) for n in _nvidia_gpus() if vulkan_works(n)]
+            for f in sorted(Gst.Registry.get().get_feature_list(Gst.ElementFactory), key=lambda f: f.get_name()):
+                name = f.get_name()
+                if _is_va(name):
+                    # "VA-API H.265 Encoder in AMD Radeon AI PRO R9700" (+ " in renderD129")
+                    label = (f.get_metadata("long-name") or name).split(" in ", 1)[-1].split(" in renderD")[0]
+                    found.append((f"va:{name}", label))
+            _gpus = found
+        return _gpus
 
 
 def init():
@@ -142,7 +173,7 @@ def encoder_description(name, kbps, fps, gop, speed):
         want = [("preset", "low-latency-hp" if speed else "low-latency-hq"), ("rc-mode", "vbr"),
                 ("bitrate", kbps), ("max-bitrate", kbps * 2), ("vbv-buffer-size", vbv), ("gop-size", gop),
                 ("bframes", 0), ("zerolatency", True), ("aud", False), ("rc-lookahead", 0), ("spatial-aq", True)]
-    elif name == "vah265enc":
+    elif _is_va(name):
         want = [("rate-control", "vbr"), ("bitrate", kbps), ("target-percentage", 66), ("key-int-max", gop),
                 ("b-frames", 0), ("ref-frames", 1), ("target-usage", 7 if speed else 4), ("aud", False)]
     elif name == "vaapih265enc":
@@ -164,8 +195,9 @@ def convert_description(encoder, width, height):
     size = f",width={width},height={height}" if width and height else ""
     if encoder.startswith("nv") and have("cudaupload") and have("cudaconvertscale"):
         return f"cudaupload ! cudaconvertscale ! video/x-raw(memory:CUDAMemory),format=NV12{size}"
-    if encoder == "vah265enc" and have("vapostproc"):
-        return f"vapostproc ! video/x-raw(memory:VAMemory),format=NV12{size}"
+    postproc = encoder[:-len("h265enc")] + "postproc"     # vah265enc -> vapostproc, on the same GPU
+    if _is_va(encoder) and have(postproc):
+        return f"{postproc} ! video/x-raw(memory:VAMemory),format=NV12{size}"
     fmt = "I420" if encoder == "x265enc" else "NV12"
     return f"videoconvert n-threads=4 ! videoscale ! video/x-raw,format={fmt}{size}"
 
@@ -190,7 +222,7 @@ class Pipeline:
     GStreamer thread; on_failed(reason) from the main thread."""
 
     def __init__(self, source_desc, enc_width, enc_height, fps, bitrate, speed, on_au, on_failed, encoder=None,
-                 gpu_source=False):
+                 gpu_source=False, gpu="auto"):
         self.source_desc = source_desc
         # Frames that come as GPU (GL) memory: a failure may be the source's, not the encoder's, so
         # no encoder is marked bad and only the first is tried; the host then falls back to copies.
@@ -199,6 +231,8 @@ class Pipeline:
         self.fps, self.bitrate, self.speed = fps, bitrate, speed
         self.on_au, self.on_failed = on_au, on_failed
         self.forced_encoder = encoder
+        self.gpu = gpu                  # "Encode on": "auto", "vulkan:<GPU name>" or "va:<element>"
+        self.vk_device = None           # the GPU sill-vkenc encodes on
         self.pipeline = None
         self.sink = None
         self.encoder = None
@@ -218,7 +252,8 @@ class Pipeline:
 
     def candidates(self):
         if self.forced_encoder == VULKAN:
-            return [VULKAN] if vulkan_device() else []
+            self.vk_device = vulkan_device()
+            return [VULKAN] if self.vk_device else []
         if self.forced_encoder:
             return [self.forced_encoder]
         installed = [e for e in ENCODERS if have(e)]
@@ -229,9 +264,18 @@ class Pipeline:
             for e in installed:
                 _bad_encoders.pop((e, self.fps), None)
             found = installed
-        if self.forced_encoder is None and vulkan_device():
-            return [VULKAN] + (found[:1] if self.gpu_source else found)
-        return found[:1] if self.gpu_source else found
+        auto = found[:1] if self.gpu_source else found
+        # The GPU chosen in "Encode on" first; when it does not work, what Auto would pick.
+        first = []
+        if self.gpu.startswith("vulkan:") and vulkan_works(self.gpu[len("vulkan:"):]):
+            self.vk_device = self.gpu[len("vulkan:"):]
+        elif self.gpu.startswith("va:") and have(self.gpu[3:]) and not is_bad(self.gpu[3:], self.fps):
+            first = [self.gpu[3:]]
+        else:
+            self.vk_device = vulkan_device()
+        if self.vk_device:
+            first = [VULKAN]
+        return first + [e for e in auto if e not in first]
 
     def start(self):
         kbps = max(1000, int(self.bitrate * self.fps / 60 / 1000))
@@ -292,14 +336,14 @@ class Pipeline:
             pipeline = Gst.parse_launch(desc)
         except GLib.Error as e:
             errors.append(f"{VULKAN}: {e.message}")
-            vulkan_failed(e.message)
+            vulkan_failed(self.vk_device, e.message)
             return False
         try:
-            proc = subprocess.Popen([VKENC, vulkan_device(), str(self.fps), str(kbps), str(gop)],
+            proc = subprocess.Popen([VKENC, self.vk_device, str(self.fps), str(kbps), str(gop)],
                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         except OSError as e:
             errors.append(f"{VULKAN}: {e}")
-            vulkan_failed(str(e))
+            vulkan_failed(self.vk_device, str(e))
             return False
         self.encoder = VULKAN
         self.pipeline = pipeline
@@ -314,15 +358,15 @@ class Pipeline:
         threading.Thread(target=self._read_aus, args=(proc,), daemon=True).start()
         threading.Thread(target=self._read_errors, args=(proc,), daemon=True).start()
         self.started = time.monotonic()
-        log.info("pipeline: %s ! sill-vkenc on %s", desc, vulkan_device())
+        log.info("pipeline: %s ! sill-vkenc on %s", desc, self.vk_device)
         if pipeline.set_state(Gst.State.PLAYING) == Gst.StateChangeReturn.FAILURE:
             msg = bus.pop_filtered(Gst.MessageType.ERROR)
             why = msg.parse_error()[0].message if msg else "could not start"
             errors.append(f"{VULKAN}: {why}")
-            vulkan_failed(why)
+            vulkan_failed(self.vk_device, why)
             self._teardown()
             return False
-        log.info("encoding with %s (Vulkan) at %d kbps, %d fps", VULKAN, kbps, self.fps)
+        log.info("encoding with %s (Vulkan, %s) at %d kbps, %d fps", VULKAN, self.vk_device, kbps, self.fps)
         return True
 
     def _raw_sample(self, sink):
@@ -398,7 +442,7 @@ class Pipeline:
         if self.stopped or self.proc is None:
             return False
         why = getattr(self, "vk_error", None) or f"sill-vkenc exited ({code})"
-        vulkan_failed(why)
+        vulkan_failed(self.vk_device, why)
         self.encoder_fault = True
         self._teardown()
         self.on_failed(why)
@@ -447,7 +491,7 @@ class Pipeline:
             factory = src.get_factory().get_name() if isinstance(src, Gst.Element) and src.get_factory() else ""
             encoder_side = factory in ENCODERS or factory in ("cudaupload", "cudaconvertscale", "vapostproc")
             if self.encoder == VULKAN and self.frames == 0:
-                vulkan_failed(err.message)
+                vulkan_failed(self.vk_device, err.message)
                 self.encoder_fault = True
             elif self.frames == 0 and self.encoder and not self.forced_encoder and encoder_side and not self.gpu_source:
                 if time.monotonic() - self.started < 10:

@@ -22,7 +22,7 @@ log = logging.getLogger("sill.host")
 VIRTUAL_ID = 1
 PRESETS = [4_000_000, 8_000_000, 15_000_000, 25_000_000, 40_000_000, 80_000_000, 150_000_000]
 DEFAULTS = {"maxFPS": 60, "bitrate": 40_000_000, "captureScale": 2.0, "prioritizeSpeed": False,
-            "virtualDisplay": False, "paused": False}
+            "virtualDisplay": False, "paused": False, "encodeGPU": "auto"}
 SKIP_IFACES = ("lo", "docker", "br-", "veth", "virbr", "vmnet", "vboxnet")
 
 
@@ -153,6 +153,8 @@ class Host:
     # --- running ------------------------------------------------------------------------------
     def run(self):
         video.init()
+        # The "Encode on" choices need a test encode per NVIDIA GPU: find them before the tray asks.
+        threading.Thread(target=video.encode_gpus, daemon=True).start()
         self.door.serve_forever()
         self.advertiser.start()
         self._control_server()
@@ -427,6 +429,8 @@ class Host:
             v["prioritizeSpeed"] = ch["prioritizeSpeed"]
         if "virtualDisplay" in ch and isinstance(ch["virtualDisplay"], bool) and self.mutter:
             v["virtualDisplay"] = ch["virtualDisplay"]
+        if "encodeGPU" in ch and (ch["encodeGPU"] == "auto" or ch["encodeGPU"] in dict(video.encode_gpus())):
+            v["encodeGPU"] = ch["encodeGPU"]
         self.settings.save()
         log.info("settings: %s", v)
         if s is not None:
@@ -463,7 +467,7 @@ class Host:
         fps = max(24, min(s["maxFPS"], fps, self.fps_limit))
         half = s["captureScale"] < 1.5
         base = dict(fps=fps, bitrate=s["bitrate"], speed=s["prioritizeSpeed"], scale_half=half,
-                    cursor=self._cursor_in_video(sessions))
+                    cursor=self._cursor_in_video(sessions), gpu=s["encodeGPU"])
         wid = active.get("window", {}).get("_0") if "window" in active else None
         fit = "desktop" in active and s["virtualDisplay"] and self.mutter and not self.args.test_source
         if fit and getattr(self.args, "fit", "off") == "off":
@@ -592,7 +596,8 @@ class Host:
         if gl:
             forced = self.args.encoder or ""
             nv = forced.startswith("nv") or (not forced and video.have("nvh265enc")
-                                            and not video.is_bad("nvh265enc", spec.fps))
+                                            and not video.is_bad("nvh265enc", spec.fps)
+                                            and not spec.gpu.startswith("va:"))
             # NVIDIA's encoder takes GL memory directly (CUDA-GL interop); others need it back in memory.
             tail = " ! glupload ! glcolorconvert ! video/x-raw(memory:GLMemory),format=RGBA"
             if not nv:
@@ -649,7 +654,7 @@ class Host:
         p = self.pipeline
         if p is not None and (p.encoder == video.VULKAN or p.encoder_fault):
             # Vulkan encoding failed, not the GPU frames: the next try uses the other encoders.
-            video.vulkan_failed(why)
+            video.vulkan_failed(p.vk_device, why)
             return
         if getattr(self, "using_dmabuf", False) and not self.dmabuf_bad:
             self.dmabuf_bad = True
@@ -664,7 +669,7 @@ class Host:
         try:
             self.pipeline = video.Pipeline(source_desc, w, h, spec.fps, spec.bitrate, spec.speed,
                                            self._on_au, self._pipeline_failed, encoder=self.args.encoder,
-                                           gpu_source=spec.kind == "mutter" and self.using_dmabuf)
+                                           gpu_source=spec.kind == "mutter" and self.using_dmabuf, gpu=spec.gpu)
             self.pipeline.start()
         except Exception as e:
             log.error("could not start the stream: %s", e)
@@ -990,6 +995,7 @@ class Host:
                                 for k, d in self.devices.listing().items()],
                     "stream": r.__dict__ if r else None,
                     "encoder": self.pipeline.encoder if self.pipeline else None,
+                    "encodeGPU": self.settings["encodeGPU"], "encodeGPUs": video.encode_gpus(),
                     "frames": self.pipeline.frames if self.pipeline else 0,
                     "captureSize": self.pipeline.capture_size if self.pipeline else None,
                     "build": updates.BUILD, "update": self.updates.available, "canUpdate": updates.can_update()}
